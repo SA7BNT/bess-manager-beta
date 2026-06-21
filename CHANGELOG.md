@@ -8,7 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [9.9.0b1] - 2026-06-27
 
-Syncs beta with all production changes through v9.8.0. No new beta-only features in this release.
+Syncs beta with all production changes through v9.8.0, and includes the full ENTSO-e/Belpex pricing provider (beta-only, issue #126).
+
+### Added (beta-only)
+
+- **ENTSO-e / Belpex price provider** — New `entsoe` energy provider reads day-ahead spot prices from the [ENTSO-e Transparency Platform](https://github.com/JaccoR/hass-entso-e) HA integration. Auto-detected by the setup wizard. (#126)
+- **Generalised pricing formula** — New `spot_multiplier` and `export_spot_multiplier` fields support Belgian-style dynamic contracts where the supplier applies a multiplicative factor to the spot price. Defaults to 1.0 (no change for existing Nordic users). (#126)
+- **Provider-specific pricing defaults** — Switching provider in the wizard now pre-fills appropriate defaults (ENTSO-e → Luminus Dynamic values for Belgium, Nordpool → Swedish defaults). (#126)
+- **Backend-driven currency detection** — Currency is auto-detected from the provider in the backend (ENTSO-e → EUR, Octopus → GBP). (#126)
+
+### Fixed (beta-only)
+
+- **Solcast detection failed with non-English entity names** — Solcast sensors now matched via entity registry `unique_id` instead of entity_id substring, fixing detection for translated HA installations. (#126)
+- **Currency not auto-set when switching to ENTSO-e** — Setup wizard now always applies EUR when ENTSO-e is selected, overwriting any prior currency value. (#126)
+- **Debug export missing ENTSO-e discovery fields** — Debug exporter now captures ENTSO-e discovery fields (`entsoe_found`, `entsoe_entity`) in the "Resolved by BESS" section. (#126)
 
 ## [9.8.0] - 2026-06-27
 
