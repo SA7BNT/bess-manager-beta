@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [9.9.0b1] - 2026-06-27
+
+Syncs beta with all production changes through v9.8.0. No new beta-only features in this release.
+
 ## [9.8.0] - 2026-06-27
 
 ### Added
