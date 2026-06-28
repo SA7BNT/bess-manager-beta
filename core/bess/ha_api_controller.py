@@ -651,9 +651,10 @@ class HomeAssistantAPIController:
     }
 
     # Solis hybrid inverters via Pho3niX90/solis_modbus.
-    # Entity unique IDs are generated as
-    # ``solis_modbus_<serial>_<definition_unique>`` for sensors/numbers/time
-    # and ``solis_modbus_<serial>_<register>_<bit>`` for switch entities.
+    # Entity unique IDs are usually generated as ``solis_modbus_<serial>_<suffix>``.
+    # Some solis_modbus versions embed the sensor definition as text instead,
+    # e.g. ``...'unique': 'solis_modbus_inverter_battery_soc'...``.
+    # Switch entities use ``solis_modbus_<serial>_<register>_<bit>``.
     SOLIS_SUFFIX_MAP: ClassVar[dict[str, str]] = {
         # Monitoring
         "solis_modbus_inverter_battery_soc": "battery_soc",
@@ -665,6 +666,7 @@ class HomeAssistantAPIController:
         "solis_modbus_inverter_meter_total_active_energy_from_grid": "lifetime_import_from_grid",
         "solis_modbus_inverter_meter_total_active_energy_to_grid": "lifetime_export_to_grid",
         "solis_modbus_inverter_pv_total_generation": "lifetime_solar_energy",
+        "solis_modbus_inverter_household_total_energy": "lifetime_load_consumption",
         "solis_modbus_inverter_household_load_total_energy": "lifetime_load_consumption",
         # Global control
         "43110_0": "solis_self_use_mode",
@@ -3062,7 +3064,14 @@ class HomeAssistantAPIController:
             if entity.get("platform") not in self._SOLIS_PLATFORMS:
                 continue
             unique_id = str(entity.get("unique_id", ""))
-            if unique_id.endswith(f"_{self._SOLIS_TOU_MARKER_SUFFIX}"):
+            suffix = self._SOLIS_TOU_MARKER_SUFFIX
+            if (
+                unique_id.endswith(f"_{suffix}")
+                or f"'unique': '{suffix}'" in unique_id
+                or f"'unique':'{suffix}'" in unique_id
+                or f'"unique": "{suffix}"' in unique_id
+                or f'"unique":"{suffix}"' in unique_id
+            ):
                 logger.info("Solis TOU marker found: unique_id=%s", unique_id)
                 return True
         return False
@@ -3213,8 +3222,44 @@ class HomeAssistantAPIController:
         Returns:
             dict mapping bess_sensor_key -> entity_id.
         """
+        def unique_id_matches(unique_id: str, suffix: str) -> bool:
+            return (
+                unique_id.endswith(f"_{suffix}")
+                or unique_id.endswith(f"-{suffix}")
+                or unique_id == suffix
+                or f"'unique': '{suffix}'" in unique_id
+                or f"'unique':'{suffix}'" in unique_id
+                or f'"unique": "{suffix}"' in unique_id
+                or f'"unique":"{suffix}"' in unique_id
+            )
+
+        def domain_rank(bess_key: str, entity_id: str) -> int:
+            domain = entity_id.split(".", 1)[0]
+
+            if bess_key.startswith("solis_tou_"):
+                if "_start_" in bess_key or "_end_" in bess_key:
+                    return 0 if domain == "time" else 1
+                if "_enabled_" in bess_key:
+                    return 0 if domain == "switch" else 1
+                if "_current_" in bess_key or "_stop_soc_" in bess_key:
+                    return 0 if domain == "number" else 1
+
+            if bess_key in {"grid_charge", "solis_self_use_mode", "solis_tou_mode"}:
+                return 0 if domain == "switch" else 1
+
+            if bess_key in {
+                "battery_charging_power_rate",
+                "battery_discharging_power_rate",
+                "battery_charge_stop_soc",
+                "battery_discharge_stop_soc",
+            }:
+                return 0 if domain == "number" else 1
+
+            return 0
+
         result: dict[str, str] = {}
-        disabled_matches: dict[str, str] = {}
+        result_ranks: dict[str, int] = {}
+        disabled_matches: dict[str, tuple[str, int]] = {}
         platform_set = set(platforms)
 
         # Sort suffixes longest-first so "total_grid_import" matches before
@@ -3234,22 +3279,20 @@ class HomeAssistantAPIController:
             is_disabled = bool(entity.get("disabled_by"))
 
             for suffix, bess_key in sorted_suffixes:
-                if (
-                    unique_id.endswith(f"_{suffix}")
-                    or unique_id.endswith(f"-{suffix}")
-                    or unique_id == suffix
-                ):
-                    if bess_key not in result:
-                        if is_disabled:
-                            # Defer — an enabled entity may appear later
-                            if bess_key not in disabled_matches:
-                                disabled_matches[bess_key] = entity_id
-                        else:
-                            result[bess_key] = entity_id
+                if unique_id_matches(unique_id, suffix):
+                    rank = domain_rank(bess_key, entity_id)
+                    if is_disabled:
+                        # Defer — an enabled entity may appear later.
+                        existing = disabled_matches.get(bess_key)
+                        if existing is None or rank < existing[1]:
+                            disabled_matches[bess_key] = (entity_id, rank)
+                    elif bess_key not in result or rank < result_ranks[bess_key]:
+                        result[bess_key] = entity_id
+                        result_ranks[bess_key] = rank
                     break
 
         # Fill gaps with disabled entities and warn
-        for bess_key, entity_id in disabled_matches.items():
+        for bess_key, (entity_id, _) in disabled_matches.items():
             if bess_key not in result:
                 result[bess_key] = entity_id
                 logger.warning(

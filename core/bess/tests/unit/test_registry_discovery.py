@@ -33,19 +33,73 @@ def _solis_registry() -> list[dict]:
     def sid(suffix: str) -> str:
         return f"solis_modbus_{sn}_{suffix}"
 
+    def dict_sid(suffix: str) -> str:
+        return f"solis_modbus_{sn}_{{'name': 'Test', 'unique': '{suffix}'}}"
+
     return [
-        _entity("sensor.solis_battery_soc", "solis_modbus", sid("solis_modbus_inverter_battery_soc")),
-        _entity("sensor.solis_battery_charge_power", "solis_modbus", sid("solis_modbus_inverter_battery_charge_power")),
-        _entity("sensor.solis_battery_discharge_power", "solis_modbus", sid("solis_modbus_inverter_battery_discharge_power")),
-        _entity("sensor.solis_pv_power", "solis_modbus", sid("solis_modbus_inverter_total_dc_output")),
-        _entity("number.solis_charge_current_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_v2_battery_current_1")),
-        _entity("number.solis_discharge_current_1", "solis_modbus", sid("solis_modbus_inverter_tou_discharge_v2_battery_current_1")),
-        _entity("number.solis_charge_soc_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_cutoff_charge_1")),
-        _entity("number.solis_discharge_soc_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_cutoff_discharge_1")),
+        _entity(
+            "sensor.solis_battery_soc",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_battery_soc"),
+        ),
+        _entity(
+            "sensor.solis_battery_charge_power",
+            "solis_modbus",
+            sid("solis_modbus_inverter_battery_charge_power"),
+        ),
+        _entity(
+            "sensor.solis_battery_discharge_power",
+            "solis_modbus",
+            sid("solis_modbus_inverter_battery_discharge_power"),
+        ),
+        _entity(
+            "sensor.solis_pv_power",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_total_dc_output"),
+        ),
+        _entity(
+            "sensor.solis_household_total_energy",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_household_total_energy"),
+        ),
+        _entity(
+            "sensor.solis_charge_current_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_charge_v2_battery_current_1"),
+        ),
+        _entity(
+            "number.solis_charge_current_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_charge_v2_battery_current_1"),
+        ),
+        _entity(
+            "sensor.solis_discharge_current_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_discharge_v2_battery_current_1"),
+        ),
+        _entity(
+            "number.solis_discharge_current_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_discharge_v2_battery_current_1"),
+        ),
+        _entity(
+            "number.solis_charge_soc_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_charge_cutoff_charge_1"),
+        ),
+        _entity(
+            "number.solis_discharge_soc_1",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_charge_cutoff_discharge_1"),
+        ),
         _entity("switch.solis_self_use", "solis_modbus", sid("43110_0")),
         _entity("switch.solis_tou", "solis_modbus", sid("43110_1")),
         _entity("switch.solis_grid_charge", "solis_modbus", sid("43110_5")),
-        _entity("sensor.solis_tou_v2", "solis_modbus", sid("solis_modbus_inverter_tou_v2_switch")),
+        _entity(
+            "sensor.solis_tou_v2",
+            "solis_modbus",
+            dict_sid("solis_modbus_inverter_tou_v2_switch"),
+        ),
         _entity("switch.solis_charge_enable_1", "solis_modbus", sid("43707_0")),
         _entity("switch.solis_discharge_enable_1", "solis_modbus", sid("43707_6")),
         _entity("time.solis_charge_start_1", "solis_modbus", sid("time_entity_43711")),
@@ -847,6 +901,10 @@ class TestDiscoverSensorsFromRegistry:
         assert "solis_modbus" in sensors
         solis = sensors["solis_modbus"]
         assert solis["battery_soc"] == "sensor.solis_battery_soc"
+        assert (
+            solis["lifetime_load_consumption"]
+            == "sensor.solis_household_total_energy"
+        )
         assert solis["solis_tou_mode"] == "switch.solis_tou"
         assert solis["grid_charge"] == "switch.solis_grid_charge"
         assert solis["battery_charging_power_rate"] == "number.solis_charge_current_1"
