@@ -120,6 +120,7 @@ def _full_wizard_payload(**overrides) -> dict:
             "solax_modbus_growatt_min": {},
             "solax_modbus_growatt_sph": {},
             "solax_modbus_native": {},
+            "solis_modbus": {},
             "shared": {},
         },
         "nordpoolArea": "SE4",
@@ -522,6 +523,7 @@ class TestSetupComplete:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             }
         )
@@ -588,6 +590,7 @@ class TestSetupComplete:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             }
         )

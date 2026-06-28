@@ -23,6 +23,7 @@ export interface DiscoveryResult {
   deviceSn: string | null;
   growattDeviceId: string | null;
   solaxFound: boolean;
+  solisFound?: boolean;
   solaxHasGrowattTou: boolean;
   solaxHasGrowattGen3: boolean;
   nordpoolFound: boolean;
@@ -76,6 +77,7 @@ function isIntegrationFound(
   if (id === 'solax_modbus_growatt_min') return discovery.solaxHasGrowattTou;
   if (id === 'solax_modbus_growatt_sph') return discovery.solaxHasGrowattGen3;
   if (id === 'solax_modbus_native') return discovery.solaxFound;
+  if (id === 'solis_modbus') return Boolean(discovery.solisFound || (sensors.solis_modbus ?? {})['solis_tou_mode']);
   if (id === 'nordpool') return discovery.nordpoolFound;
   if (id === 'phase_current') {
     return !!(shared['current_l1'] || shared['current_l2'] || shared['current_l3']);
@@ -146,7 +148,7 @@ function healthDot(
 // ---------------------------------------------------------------------------
 
 // IDs of inverter integrations — only one should be visible at a time.
-const INVERTER_IDS = new Set(['growatt_server_min', 'growatt_server_sph', 'solax_modbus_growatt_min', 'solax_modbus_growatt_sph', 'solax_modbus_native']);
+const INVERTER_IDS = new Set(['growatt_server_min', 'growatt_server_sph', 'solax_modbus_growatt_min', 'solax_modbus_growatt_sph', 'solax_modbus_native', 'solis_modbus']);
 
 interface Props {
   sensors: PerPlatformSensors;
@@ -196,6 +198,9 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
   const solaxDetected = wizardMode
     ? Boolean(discovery.solaxFound && !discovery.solaxHasGrowattTou && !discovery.solaxHasGrowattGen3)
     : Boolean((sensors.solax_modbus_native ?? {})['solax_power_control_mode'] || (sensors.solax_modbus_native ?? {})['solax_active_power']);
+  const solisDetected = wizardMode
+    ? Boolean(discovery.solisFound || (sensors.solis_modbus ?? {})['solis_tou_mode'])
+    : Boolean((sensors.solis_modbus ?? {})['solis_tou_mode'] || (sensors.solis_modbus ?? {})['battery_soc']);
 
   /** Update a sensor value in the correct sub-dict (platform or shared). */
   const handleSensorChange = (integrationId: string, sensorKey: string, value: string) => {
@@ -218,7 +223,8 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
   const isCloudActive = inverterForm.inverterPlatform === 'growatt_server_min' || inverterForm.inverterPlatform === 'growatt_server_sph';
   const isModbusActive = inverterForm.inverterPlatform === 'solax_modbus_growatt_min'
     || inverterForm.inverterPlatform === 'solax_modbus_growatt_sph'
-    || inverterForm.inverterPlatform === 'solax_modbus_native';
+    || inverterForm.inverterPlatform === 'solax_modbus_native'
+    || inverterForm.inverterPlatform === 'solis_modbus';
 
   const handleIntegrationChange = (integration: 'cloud' | 'modbus') => {
     if (integration === 'cloud') {
@@ -229,6 +235,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
       // Default to solax_modbus_growatt_min if Growatt TOU detected, otherwise native
       const newType = growattModbusDetected ? 'solax_modbus_growatt_min'
         : growattModbusGen3Detected ? 'solax_modbus_growatt_sph'
+        : solisDetected ? 'solis_modbus'
         : 'solax_modbus_native';
       onInverterChange({ ...inverterForm, inverterPlatform: newType });
       onChange({ ...sensors, platform: newType });
@@ -342,6 +349,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
                     { value: 'solax_modbus_native' as const, label: 'SolaX Native', detected: solaxDetected },
                     { value: 'solax_modbus_growatt_min' as const, label: 'Growatt MIN/GEN4', detected: growattModbusDetected },
                     { value: 'solax_modbus_growatt_sph' as const, label: 'Growatt SPH/GEN3', detected: growattModbusGen3Detected },
+                    { value: 'solis_modbus' as const, label: 'Solis', detected: solisDetected },
                   ]).map(opt => {
                     const selected = inverterForm.inverterPlatform === opt.value;
                     const disabled = wizardMode && !opt.detected;

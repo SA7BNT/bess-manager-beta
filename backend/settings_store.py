@@ -39,6 +39,7 @@ VALID_PLATFORMS = (
     "solax_modbus_growatt_min",
     "solax_modbus_growatt_sph",
     "solax_modbus_native",
+    "solis_modbus",
 )
 
 # Sensor keys that are shared across all platforms (not inverter-specific).
@@ -62,6 +63,7 @@ VALID_PLATFORMS = (
     "solax_modbus_growatt_min",
     "solax_modbus_growatt_sph",
     "solax_modbus_native",
+    "solis_modbus",
 )
 
 # Sensor keys that are shared across all platforms (not inverter-specific).
@@ -412,6 +414,7 @@ class SettingsStore:
                 "solax_modbus_growatt_min": {},
                 "solax_modbus_growatt_sph": {},
                 "solax_modbus_native": {},
+                "solis_modbus": {},
                 "shared": {},
             },
             "demo_mode": {"enabled": False},
@@ -567,6 +570,15 @@ class SettingsStore:
                     len(shared),
                 )
                 changed = True
+        elif isinstance(sensors, dict) and "platform" in sensors:
+            for platform in VALID_PLATFORMS:
+                if platform not in sensors:
+                    sensors[platform] = {}
+                    changed = True
+            if "shared" not in sensors:
+                sensors["shared"] = {}
+                changed = True
+            self.data["sensors"] = sensors
 
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:

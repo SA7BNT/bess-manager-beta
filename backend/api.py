@@ -2982,6 +2982,12 @@ async def run_setup_discovery():
                 and "solax_modbus_growatt_sph" in platform_sensors
             ):
                 effective_platform = "solax_modbus_growatt_sph"
+            elif (
+                detected_platform
+                and detected_platform.startswith("growatt_server")
+                and "solis_modbus" in platform_sensors
+            ):
+                effective_platform = "solis_modbus"
             sensors = dict(platform_sensors.get(effective_platform, {}))
             _suffix_maps = {
                 "growatt_server_min": ha.GROWATT_MIN_SUFFIX_MAP,
@@ -2989,6 +2995,7 @@ async def run_setup_discovery():
                 "solax_modbus_growatt_min": ha.SOLAX_GROWATT_MIN_SUFFIX_MAP,
                 "solax_modbus_growatt_sph": ha.SOLAX_GROWATT_SPH_SUFFIX_MAP,
                 "solax_modbus_native": ha.SOLAX_NATIVE_SUFFIX_MAP,
+                "solis_modbus": ha.SOLIS_SUFFIX_MAP,
             }
             suffix_map = _suffix_maps.get(effective_platform, ha.GROWATT_MIN_SUFFIX_MAP)
             all_bess_keys = list(set(suffix_map.values()))

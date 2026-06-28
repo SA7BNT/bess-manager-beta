@@ -650,6 +650,86 @@ class HomeAssistantAPIController:
         "charger_use_mode": "solax_charger_use_mode",
     }
 
+    # Solis hybrid inverters via Pho3niX90/solis_modbus.
+    # Entity unique IDs are generated as
+    # ``solis_modbus_<serial>_<definition_unique>`` for sensors/numbers/time
+    # and ``solis_modbus_<serial>_<register>_<bit>`` for switch entities.
+    SOLIS_SUFFIX_MAP: ClassVar[dict[str, str]] = {
+        # Monitoring
+        "solis_modbus_inverter_battery_soc": "battery_soc",
+        "solis_modbus_inverter_battery_charge_power": "battery_charge_power",
+        "solis_modbus_inverter_battery_discharge_power": "battery_discharge_power",
+        "solis_modbus_inverter_total_dc_output": "pv_power",
+        "solis_modbus_inverter_household_load_power": "local_load_power",
+        "solis_modbus_inverter_grid_power_net": "import_power",
+        "solis_modbus_inverter_meter_total_active_energy_from_grid": "lifetime_import_from_grid",
+        "solis_modbus_inverter_meter_total_active_energy_to_grid": "lifetime_export_to_grid",
+        "solis_modbus_inverter_pv_total_generation": "lifetime_solar_energy",
+        "solis_modbus_inverter_household_load_total_energy": "lifetime_load_consumption",
+        # Global control
+        "43110_0": "solis_self_use_mode",
+        "43110_1": "solis_tou_mode",
+        "43110_5": "grid_charge",
+        "solis_modbus_inverter_tou_charge_v2_battery_current_1": "battery_charging_power_rate",
+        "solis_modbus_inverter_tou_discharge_v2_battery_current_1": "battery_discharging_power_rate",
+        "solis_modbus_inverter_tou_charge_cutoff_charge_1": "battery_charge_stop_soc",
+        "solis_modbus_inverter_tou_charge_cutoff_discharge_1": "battery_discharge_stop_soc",
+        # Grid TOU v2 switches, times and per-slot limits.
+        **{
+            f"43707_{slot - 1}": f"solis_tou_charge_enabled_{slot}"
+            for slot in range(1, 7)
+        },
+        **{
+            f"43707_{slot + 5}": f"solis_tou_discharge_enabled_{slot}"
+            for slot in range(1, 7)
+        },
+        **{
+            f"time_entity_{register}": key
+            for register, key in {
+                43711: "solis_tou_charge_start_1",
+                43713: "solis_tou_charge_end_1",
+                43718: "solis_tou_charge_start_2",
+                43720: "solis_tou_charge_end_2",
+                43725: "solis_tou_charge_start_3",
+                43727: "solis_tou_charge_end_3",
+                43732: "solis_tou_charge_start_4",
+                43734: "solis_tou_charge_end_4",
+                43739: "solis_tou_charge_start_5",
+                43741: "solis_tou_charge_end_5",
+                43746: "solis_tou_charge_start_6",
+                43748: "solis_tou_charge_end_6",
+                43753: "solis_tou_discharge_start_1",
+                43755: "solis_tou_discharge_end_1",
+                43760: "solis_tou_discharge_start_2",
+                43762: "solis_tou_discharge_end_2",
+                43767: "solis_tou_discharge_start_3",
+                43769: "solis_tou_discharge_end_3",
+                43774: "solis_tou_discharge_start_4",
+                43776: "solis_tou_discharge_end_4",
+                43781: "solis_tou_discharge_start_5",
+                43783: "solis_tou_discharge_end_5",
+                43788: "solis_tou_discharge_start_6",
+                43790: "solis_tou_discharge_end_6",
+            }.items()
+        },
+        **{
+            f"solis_modbus_inverter_tou_charge_v2_battery_current_{slot}": f"solis_tou_charge_current_{slot}"
+            for slot in range(2, 7)
+        },
+        **{
+            f"solis_modbus_inverter_tou_discharge_v2_battery_current_{slot}": f"solis_tou_discharge_current_{slot}"
+            for slot in range(2, 7)
+        },
+        **{
+            f"solis_modbus_inverter_tou_charge_cutoff_charge_{slot}": f"solis_tou_charge_stop_soc_{slot}"
+            for slot in range(2, 7)
+        },
+        **{
+            f"solis_modbus_inverter_tou_charge_cutoff_discharge_{slot}": f"solis_tou_discharge_stop_soc_{slot}"
+            for slot in range(2, 7)
+        },
+    }
+
     SOLCAST_SUFFIX_MAP: ClassVar[dict[str, str]] = {
         "total_kwh_forecast_today": "solar_forecast_today",
         "total_kwh_forecast_tomorrow": "solar_forecast_tomorrow",
@@ -1408,6 +1488,242 @@ class HomeAssistantAPIController:
 
         return segments
 
+    # ── Solis solis_modbus entity-based TOU control ──────────────────────
+
+    def _set_number_entity(self, sensor_key: str, value: float, operation: str) -> None:
+        entity_id = self._get_entity_for_service(sensor_key)
+        self._service_call_with_retry(
+            "number",
+            "set_value",
+            operation=operation,
+            entity_id=entity_id,
+            value=value,
+        )
+
+    def _set_number_percent_of_max(
+        self, sensor_key: str, rate_pct: float, operation: str
+    ) -> None:
+        entity_id = self._get_entity_for_service(sensor_key)
+        response = self._api_request(
+            "get",
+            f"/api/states/{entity_id}",
+            operation=f"Read max for {sensor_key}",
+            category="sensor_read",
+        )
+        attrs = response.get("attributes", {}) if response else {}
+        max_value = attrs.get("max") or attrs.get("native_max_value") or 100
+        value = round(float(max_value) * max(0.0, min(100.0, rate_pct)) / 100.0, 1)
+        self._service_call_with_retry(
+            "number",
+            "set_value",
+            operation=operation,
+            entity_id=entity_id,
+            value=value,
+        )
+
+    def _set_time_entity(self, sensor_key: str, value: str, operation: str) -> None:
+        entity_id = self._get_entity_for_service(sensor_key)
+        service_value = value if len(value.split(":")) == 3 else f"{value}:00"
+        self._service_call_with_retry(
+            "time",
+            "set_value",
+            operation=operation,
+            entity_id=entity_id,
+            time=service_value,
+        )
+
+    def _set_switch_entity(self, sensor_key: str, enabled: bool, operation: str) -> None:
+        entity_id = self._get_entity_for_service(sensor_key)
+        self._service_call_with_retry(
+            "switch",
+            "turn_on" if enabled else "turn_off",
+            operation=operation,
+            entity_id=entity_id,
+        )
+
+    def set_solis_discharge_rate(self, rate_pct: float) -> None:
+        """Set Solis slot-1 discharge current as a percentage of entity max.
+
+        Slot 1 acts as the active discharge-current register for the BESS
+        period loop. Full schedule writes still set all slot currents.
+        """
+        self._set_number_percent_of_max(
+            "battery_discharging_power_rate",
+            rate_pct,
+            "Set Solis discharge current",
+        )
+
+    def set_solis_soc_limits(
+        self, charge_stop_soc: int, discharge_stop_soc: int
+    ) -> None:
+        """Write configured SOC limits to all configured Solis TOU slots."""
+        for slot in range(1, 7):
+            charge_key = (
+                "battery_charge_stop_soc"
+                if slot == 1
+                else f"solis_tou_charge_stop_soc_{slot}"
+            )
+            discharge_key = (
+                "battery_discharge_stop_soc"
+                if slot == 1
+                else f"solis_tou_discharge_stop_soc_{slot}"
+            )
+            try:
+                self._set_number_entity(
+                    charge_key,
+                    charge_stop_soc,
+                    f"Set Solis charge stop SOC slot {slot}",
+                )
+            except ValueError:
+                logger.debug("Solis charge SOC slot %d not configured", slot)
+            try:
+                self._set_number_entity(
+                    discharge_key,
+                    discharge_stop_soc,
+                    f"Set Solis discharge stop SOC slot {slot}",
+                )
+            except ValueError:
+                logger.debug("Solis discharge SOC slot %d not configured", slot)
+
+    def write_solis_tou_schedule(
+        self,
+        charge_periods: list[dict],
+        discharge_periods: list[dict],
+        charge_rate_pct: float,
+        discharge_rate_pct: float,
+        charge_stop_soc: int,
+        discharge_stop_soc: int,
+        max_slots: int = 6,
+    ) -> None:
+        """Write Solis grid TOU v2 charge/discharge slots via HA entities."""
+        self._set_switch_entity("solis_self_use_mode", True, "Enable Solis self-use")
+        self._set_switch_entity("solis_tou_mode", True, "Enable Solis TOU mode")
+        self.set_grid_charge(bool(charge_periods))
+
+        for slot in range(1, max_slots + 1):
+            charge = charge_periods[slot - 1] if slot <= len(charge_periods) else None
+            discharge = (
+                discharge_periods[slot - 1] if slot <= len(discharge_periods) else None
+            )
+
+            charge_current_key = (
+                "battery_charging_power_rate"
+                if slot == 1
+                else f"solis_tou_charge_current_{slot}"
+            )
+            discharge_current_key = (
+                "battery_discharging_power_rate"
+                if slot == 1
+                else f"solis_tou_discharge_current_{slot}"
+            )
+            charge_soc_key = (
+                "battery_charge_stop_soc"
+                if slot == 1
+                else f"solis_tou_charge_stop_soc_{slot}"
+            )
+            discharge_soc_key = (
+                "battery_discharge_stop_soc"
+                if slot == 1
+                else f"solis_tou_discharge_stop_soc_{slot}"
+            )
+
+            if charge:
+                self._set_time_entity(
+                    f"solis_tou_charge_start_{slot}",
+                    charge["start_time"],
+                    f"Set Solis charge slot {slot} start",
+                )
+                self._set_time_entity(
+                    f"solis_tou_charge_end_{slot}",
+                    charge["end_time"],
+                    f"Set Solis charge slot {slot} end",
+                )
+                self._set_number_percent_of_max(
+                    charge_current_key,
+                    charge_rate_pct,
+                    f"Set Solis charge current slot {slot}",
+                )
+                self._set_number_entity(
+                    charge_soc_key,
+                    charge_stop_soc,
+                    f"Set Solis charge stop SOC slot {slot}",
+                )
+            self._set_switch_entity(
+                f"solis_tou_charge_enabled_{slot}",
+                bool(charge),
+                f"Set Solis charge slot {slot} enabled",
+            )
+
+            if discharge:
+                self._set_time_entity(
+                    f"solis_tou_discharge_start_{slot}",
+                    discharge["start_time"],
+                    f"Set Solis discharge slot {slot} start",
+                )
+                self._set_time_entity(
+                    f"solis_tou_discharge_end_{slot}",
+                    discharge["end_time"],
+                    f"Set Solis discharge slot {slot} end",
+                )
+                self._set_number_percent_of_max(
+                    discharge_current_key,
+                    discharge_rate_pct,
+                    f"Set Solis discharge current slot {slot}",
+                )
+                self._set_number_entity(
+                    discharge_soc_key,
+                    discharge_stop_soc,
+                    f"Set Solis discharge stop SOC slot {slot}",
+                )
+            self._set_switch_entity(
+                f"solis_tou_discharge_enabled_{slot}",
+                bool(discharge),
+                f"Set Solis discharge slot {slot} enabled",
+            )
+
+    def read_solis_tou_schedule(self, max_slots: int = 6) -> dict:
+        """Read Solis TOU schedule from configured entity states."""
+
+        def _state(sensor_key: str) -> str | None:
+            entity_id = self._get_entity_for_service(sensor_key)
+            response = self._api_request(
+                "get",
+                f"/api/states/{entity_id}",
+                operation=f"Read {sensor_key}",
+                category="sensor_read",
+            )
+            if response and "state" in response:
+                return str(response["state"])
+            return None
+
+        charge_periods: list[dict] = []
+        discharge_periods: list[dict] = []
+        for slot in range(1, max_slots + 1):
+            try:
+                charge_enabled = _state(f"solis_tou_charge_enabled_{slot}") == "on"
+                discharge_enabled = (
+                    _state(f"solis_tou_discharge_enabled_{slot}") == "on"
+                )
+                if charge_enabled:
+                    charge_periods.append(
+                        {
+                            "start_time": (_state(f"solis_tou_charge_start_{slot}") or "00:00")[:5],
+                            "end_time": (_state(f"solis_tou_charge_end_{slot}") or "00:00")[:5],
+                            "enabled": True,
+                        }
+                    )
+                if discharge_enabled:
+                    discharge_periods.append(
+                        {
+                            "start_time": (_state(f"solis_tou_discharge_start_{slot}") or "00:00")[:5],
+                            "end_time": (_state(f"solis_tou_discharge_end_{slot}") or "00:00")[:5],
+                            "enabled": True,
+                        }
+                    )
+            except ValueError:
+                logger.debug("Solis TOU slot %d not fully configured", slot)
+        return {"charge_periods": charge_periods, "discharge_periods": discharge_periods}
+
     def write_ac_charge_times(
         self,
         charge_power: int,
@@ -2156,6 +2472,13 @@ class HomeAssistantAPIController:
             elif self._has_growatt_gen3_entities(entity_registry_result):
                 detected_platforms.append("solax_modbus_growatt_sph")
 
+        solis_config_entry = any(
+            entry.get("domain") == "solis_modbus" and entry.get("state") == "loaded"
+            for entry in config_entries_result
+        )
+        if solis_config_entry and self._has_solis_tou_entities(entity_registry_result):
+            detected_platforms.append("solis_modbus")
+
         logger.info(
             "WS discovery: nordpool_config_entry_id=%s, nordpool_area=%s, "
             "growatt_device_id=%s, octopus_found=%s, "
@@ -2247,6 +2570,7 @@ class HomeAssistantAPIController:
             "device_sn": None,
             "growatt_device_id": None,
             "solax_found": False,
+            "solis_found": False,
             "nordpool_found": False,
             "nordpool_area": None,
             "nordpool_custom_area": None,
@@ -2284,6 +2608,7 @@ class HomeAssistantAPIController:
         inverter_detected = self.detect_inverter_integrations(registry)
         result["growatt_found"] = inverter_detected.get("growatt", False)
         result["solax_found"] = inverter_detected.get("solax", False)
+        result["solis_found"] = inverter_detected.get("solis", False)
 
         # ── States: Growatt device SN, Nordpool area ─────────────────────
         states = self._fetch_all_states()
@@ -2349,6 +2674,9 @@ class HomeAssistantAPIController:
                 detected.append("solax_modbus_growatt_sph")
             elif self._has_solax_native_entities(registry):
                 detected.append("solax_modbus_native")
+        if result.get("solis_found") and self._has_solis_tou_entities(registry):
+            if "solis_modbus" not in detected:
+                detected.append("solis_modbus")
         result["detected_inverter_platforms"] = detected
 
         # Currency & VAT from Nordpool area or Octopus defaults
@@ -2641,6 +2969,7 @@ class HomeAssistantAPIController:
     _INVERTER_PLATFORMS: ClassVar[dict[str, list[str]]] = {
         "growatt": ["growatt_server"],
         "solax": ["solax_modbus", "solax"],
+        "solis": ["solis_modbus"],
     }
     _PRICE_PLATFORMS: ClassVar[dict[str, list[str]]] = {
         "nordpool": ["nordpool"],
@@ -2686,8 +3015,12 @@ class HomeAssistantAPIController:
     _SOLAX_NATIVE_MARKER_SUFFIX: ClassVar[str] = (
         "remotecontrol_power_control"  # VPP mode selector, SolaX-only
     )
+    _SOLIS_TOU_MARKER_SUFFIX: ClassVar[str] = (
+        "solis_modbus_inverter_tou_v2_switch"
+    )
 
     _SOLAX_PLATFORMS: ClassVar[set[str]] = {"solax_modbus", "solax"}
+    _SOLIS_PLATFORMS: ClassVar[set[str]] = {"solis_modbus"}
 
     def _has_solax_entity_suffix(
         self, entities: list[dict], suffix: str, label: str
@@ -2722,6 +3055,17 @@ class HomeAssistantAPIController:
         return self._has_solax_entity_suffix(
             entities, self._SOLAX_NATIVE_MARKER_SUFFIX, "SolaX native VPP"
         )
+
+    def _has_solis_tou_entities(self, entities: list[dict]) -> bool:
+        """Check for Solis grid TOU v2 entities via solis_modbus."""
+        for entity in entities:
+            if entity.get("platform") not in self._SOLIS_PLATFORMS:
+                continue
+            unique_id = str(entity.get("unique_id", ""))
+            if unique_id.endswith(f"_{self._SOLIS_TOU_MARKER_SUFFIX}"):
+                logger.info("Solis TOU marker found: unique_id=%s", unique_id)
+                return True
+        return False
 
     def detect_inverter_integrations(
         self, entities: list[dict] | None = None
@@ -2833,6 +3177,14 @@ class HomeAssistantAPIController:
                 platform_sensors["solax_modbus_native"] = solax_sensors
                 if not detected_platform:
                     detected_platform = "solax_modbus_native"
+
+        if inverter_detected.get("solis") and self._has_solis_tou_entities(entities):
+            solis_sensors = self._map_registry_entities(
+                entities, ["solis_modbus"], self.SOLIS_SUFFIX_MAP
+            )
+            platform_sensors["solis_modbus"] = solis_sensors
+            if not detected_platform:
+                detected_platform = "solis_modbus"
 
         return platform_sensors, detected_platform
 

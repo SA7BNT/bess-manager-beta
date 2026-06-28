@@ -27,6 +27,34 @@ def _entity(entity_id: str, platform: str, unique_id: str) -> dict:
     }
 
 
+def _solis_registry() -> list[dict]:
+    sn = "solis123"
+
+    def sid(suffix: str) -> str:
+        return f"solis_modbus_{sn}_{suffix}"
+
+    return [
+        _entity("sensor.solis_battery_soc", "solis_modbus", sid("solis_modbus_inverter_battery_soc")),
+        _entity("sensor.solis_battery_charge_power", "solis_modbus", sid("solis_modbus_inverter_battery_charge_power")),
+        _entity("sensor.solis_battery_discharge_power", "solis_modbus", sid("solis_modbus_inverter_battery_discharge_power")),
+        _entity("sensor.solis_pv_power", "solis_modbus", sid("solis_modbus_inverter_total_dc_output")),
+        _entity("number.solis_charge_current_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_v2_battery_current_1")),
+        _entity("number.solis_discharge_current_1", "solis_modbus", sid("solis_modbus_inverter_tou_discharge_v2_battery_current_1")),
+        _entity("number.solis_charge_soc_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_cutoff_charge_1")),
+        _entity("number.solis_discharge_soc_1", "solis_modbus", sid("solis_modbus_inverter_tou_charge_cutoff_discharge_1")),
+        _entity("switch.solis_self_use", "solis_modbus", sid("43110_0")),
+        _entity("switch.solis_tou", "solis_modbus", sid("43110_1")),
+        _entity("switch.solis_grid_charge", "solis_modbus", sid("43110_5")),
+        _entity("sensor.solis_tou_v2", "solis_modbus", sid("solis_modbus_inverter_tou_v2_switch")),
+        _entity("switch.solis_charge_enable_1", "solis_modbus", sid("43707_0")),
+        _entity("switch.solis_discharge_enable_1", "solis_modbus", sid("43707_6")),
+        _entity("time.solis_charge_start_1", "solis_modbus", sid("time_entity_43711")),
+        _entity("time.solis_charge_end_1", "solis_modbus", sid("time_entity_43713")),
+        _entity("time.solis_discharge_start_1", "solis_modbus", sid("time_entity_43753")),
+        _entity("time.solis_discharge_end_1", "solis_modbus", sid("time_entity_43755")),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Growatt entity registry: growatt_server platform
 # ---------------------------------------------------------------------------
@@ -810,6 +838,28 @@ class TestDiscoverSensorsFromRegistry:
         assert "solax_modbus_native" in sensors
         assert len(sensors["solax_modbus_native"]) >= 10
 
+    def test_solis_modbus(self):
+        """Solis hybrid via solis_modbus maps monitoring and TOU control entities."""
+        sensors, platform = self.ctrl.discover_sensors_from_registry(
+            _solis_registry()
+        )
+        assert platform == "solis_modbus"
+        assert "solis_modbus" in sensors
+        solis = sensors["solis_modbus"]
+        assert solis["battery_soc"] == "sensor.solis_battery_soc"
+        assert solis["solis_tou_mode"] == "switch.solis_tou"
+        assert solis["grid_charge"] == "switch.solis_grid_charge"
+        assert solis["battery_charging_power_rate"] == "number.solis_charge_current_1"
+        assert (
+            solis["battery_discharging_power_rate"]
+            == "number.solis_discharge_current_1"
+        )
+        assert solis["solis_tou_charge_start_1"] == "time.solis_charge_start_1"
+        assert (
+            solis["solis_tou_discharge_enabled_1"]
+            == "switch.solis_discharge_enable_1"
+        )
+
     def test_solax_growatt_min(self):
         """Growatt GEN4 inverter via solax_modbus with TOU slots → solax_modbus_growatt_min."""
         sensors, platform = self.ctrl.discover_sensors_from_registry(
@@ -1244,6 +1294,7 @@ class TestFrontendSensorKeysMatchBackend:
         "solax_modbus_native": "SOLAX_NATIVE_SUFFIX_MAP",
         "solax_modbus_growatt_min": "SOLAX_GROWATT_MIN_SUFFIX_MAP",
         "solax_modbus_growatt_sph": "SOLAX_GROWATT_SPH_SUFFIX_MAP",
+        "solis_modbus": "SOLIS_SUFFIX_MAP",
     }
 
     @staticmethod

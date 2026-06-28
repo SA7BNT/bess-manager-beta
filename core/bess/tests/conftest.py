@@ -759,6 +759,7 @@ def battery_system_with_arbitrage(mock_controller, arbitrage_prices, monkeypatch
         "solax_modbus_growatt_min",
         "growatt_server_sph",
         "solax_modbus_native",
+        "solis_modbus",
     ]
 )
 def platform_system(request, mock_controller, arbitrage_prices, monkeypatch):
