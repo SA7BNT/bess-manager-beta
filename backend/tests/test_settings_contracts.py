@@ -276,7 +276,7 @@ class TestBatteryModelAttrsConsistency:
 class TestNordpoolServiceContract:
     """Official Nordpool service call must use the field name HA expects."""
 
-    def _call_nordpool(self, target_date: date) -> MagicMock:
+    def _call_nordpool(self, target_date: date, area: str = "") -> MagicMock:
         """Call get_prices_for_date with a mocked HA controller."""
         from core.bess.official_nordpool_source import OfficialNordpoolSource
 
@@ -290,11 +290,21 @@ class TestNordpoolServiceContract:
                         "price": 612.0,
                     }
                 ]
-                * 96
+                * 96,
+                "GER": [
+                    {
+                        "start": f"{target_date}T22:00:00+00:00",
+                        "end": f"{target_date}T23:00:00+00:00",
+                        "price": 101.0,
+                    }
+                ]
+                * 96,
             }
         }
 
-        source = OfficialNordpoolSource(ha_controller, "test-config-entry-id", 1.25)
+        source = OfficialNordpoolSource(
+            ha_controller, "test-config-entry-id", 1.25, area=area
+        )
 
         # Patch time_utils so the date-range guard accepts our target_date.
         with patch("core.bess.official_nordpool_source.time_utils") as mock_time:
@@ -328,3 +338,21 @@ class TestNordpoolServiceContract:
         ha_controller = self._call_nordpool(date(2026, 4, 13))
         kwargs = ha_controller._service_call_with_retry.call_args.kwargs
         assert kwargs["date"] == "2026-04-13"
+
+    def test_area_is_sent_as_list(self):
+        """HA's official Nordpool service expects areas as a list selector value."""
+        ha_controller = self._call_nordpool(date(2026, 4, 13), area="SE4")
+        kwargs = ha_controller._service_call_with_retry.call_args.kwargs
+        assert kwargs["areas"] == ["SE4"]
+
+    def test_german_area_aliases_use_official_code(self):
+        """Stored HACS-style Germany areas must be translated before service call."""
+        ha_controller = self._call_nordpool(date(2026, 4, 13), area="DE-LU")
+        kwargs = ha_controller._service_call_with_retry.call_args.kwargs
+        assert kwargs["areas"] == ["GER"]
+
+    def test_unknown_area_omits_area_field(self):
+        """Unknown stored areas must not be sent because HA returns 400."""
+        ha_controller = self._call_nordpool(date(2026, 4, 13), area="XX99")
+        kwargs = ha_controller._service_call_with_retry.call_args.kwargs
+        assert "areas" not in kwargs

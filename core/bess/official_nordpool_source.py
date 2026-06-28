@@ -13,6 +13,57 @@ from .price_manager import PriceSource
 
 logger = logging.getLogger(__name__)
 
+_OFFICIAL_NORDPOOL_AREA_CODES = {
+    "EE",
+    "LT",
+    "LV",
+    "AT",
+    "BE",
+    "FR",
+    "GER",
+    "NL",
+    "PL",
+    "DK1",
+    "DK2",
+    "FI",
+    "NO1",
+    "NO2",
+    "NO3",
+    "NO4",
+    "NO5",
+    "SE1",
+    "SE2",
+    "SE3",
+    "SE4",
+    "BG",
+    "TEL",
+    "SYS",
+}
+
+_OFFICIAL_NORDPOOL_AREA_ALIASES = {
+    "DE": "GER",
+    "DE-LU": "GER",
+    "DE_LU": "GER",
+}
+
+
+def _normalize_official_area(area: str) -> str | None:
+    """Normalize stored/HACS area codes to HA official Nordpool service codes."""
+    normalized = area.strip().upper()
+    if not normalized:
+        return None
+
+    normalized = _OFFICIAL_NORDPOOL_AREA_ALIASES.get(normalized, normalized)
+    if normalized in _OFFICIAL_NORDPOOL_AREA_CODES:
+        return normalized
+
+    logger.warning(
+        "Nordpool area %r is not accepted by the official HA service; "
+        "omitting the areas field and using the integration default",
+        area,
+    )
+    return None
+
 
 class OfficialNordpoolSource(PriceSource):
     """Price source that uses the official Home Assistant Nordpool integration.
@@ -80,8 +131,9 @@ class OfficialNordpoolSource(PriceSource):
                 "config_entry": self.config_entry_id,
                 "date": date_str,
             }
-            if self.area:
-                service_data["areas"] = self.area
+            service_area = _normalize_official_area(self.area) if self.area else None
+            if service_area:
+                service_data["areas"] = [service_area]
 
             # Make service call
             response = self.ha_controller._service_call_with_retry(
@@ -102,13 +154,16 @@ class OfficialNordpoolSource(PriceSource):
             # Use the configured area for an exact lookup; fall back to the first
             # list in the response for installs where area is not yet configured.
             price_entries: list = []
+            lookup_areas: list[str] = []
+            if service_area:
+                lookup_areas.append(service_area)
             if self.area:
-                price_entries = service_response.get(self.area, [])
-                if not price_entries:
-                    # Area codes are always uppercase in the response
-                    price_entries = service_response.get(self.area.upper(), [])
+                lookup_areas.append(self.area.upper())
+            for lookup_area in dict.fromkeys(lookup_areas):
+                price_entries = service_response.get(lookup_area, [])
                 if price_entries:
-                    logger.debug(f"Found price data under area key: {self.area}")
+                    logger.debug(f"Found price data under area key: {lookup_area}")
+                    break
             if not price_entries:
                 for key, value in service_response.items():
                     if isinstance(value, list) and value:
