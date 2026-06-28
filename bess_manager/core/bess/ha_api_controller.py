@@ -2543,18 +2543,70 @@ class HomeAssistantAPIController:
 
         return False
 
+    def _is_nordpool_price_entity_id(self, entity_id: str) -> bool:
+        entity_id = entity_id.lower()
+        return entity_id.startswith("sensor.nordpool_") or entity_id.startswith(
+            "sensor.nord_pool_"
+        )
+
+    def _nordpool_candidate_rank(
+        self,
+        state: dict,
+        registry_by_entity: dict[str, dict],
+    ) -> tuple[int, int, int, str]:
+        entity_id = str(state.get("entity_id", ""))
+        entity_id_lower = entity_id.lower()
+        registry_entry = registry_by_entity.get(entity_id_lower, {})
+        platform = str(registry_entry.get("platform", "")).lower()
+        attributes = state.get("attributes") or {}
+        state_value = str(state.get("state", "")).lower()
+
+        has_price_payload = any(
+            isinstance(attributes.get(key), list) and len(attributes[key]) > 0
+            for key in ("raw_today", "raw_tomorrow", "today", "tomorrow", "prices")
+        )
+        has_numeric_state = state_value not in ("", "unknown", "unavailable", "none")
+
+        if platform == "nordpool":
+            platform_rank = 0
+        elif entity_id_lower.startswith("sensor.nordpool_kwh_"):
+            platform_rank = 1
+        elif platform == "template":
+            platform_rank = 3
+        else:
+            platform_rank = 2
+
+        pattern_rank = 0 if entity_id_lower.startswith("sensor.nordpool_kwh_") else 1
+        data_rank = 0 if has_price_payload or has_numeric_state else 1
+
+        return (platform_rank, pattern_rank, data_rank, entity_id_lower)
+
     def discover_nordpool_hacs_entity(
-        self, states: list[dict] | None = None
+        self,
+        states: list[dict] | None = None,
+        registry: list[dict] | None = None,
     ) -> str | None:
-        """Discover the HACS/custom Nordpool sensor entity from HA states."""
+        """Discover the best HACS/custom Nordpool sensor entity from HA states."""
         if states is None:
             states = self._fetch_all_states()
 
-        for state in states:
-            entity_id = str(state.get("entity_id", ""))
-            if entity_id.lower().startswith("sensor.nordpool_"):
-                return entity_id
-        return None
+        registry_by_entity = {
+            str(entry.get("entity_id", "")).lower(): entry
+            for entry in registry or []
+            if entry.get("entity_id")
+        }
+        candidates = [
+            state
+            for state in states
+            if self._is_nordpool_price_entity_id(str(state.get("entity_id", "")))
+        ]
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda state: self._nordpool_candidate_rank(state, registry_by_entity)
+        )
+        return str(candidates[0].get("entity_id"))
 
     # Maps Nordpool area code prefix → (currency, vat_multiplier).
     # These are approximate defaults used to pre-fill the setup wizard;
@@ -2659,14 +2711,16 @@ class HomeAssistantAPIController:
             result["growatt_found"] = True
             result["device_sn"] = device_sn
 
+        nordpool_states: list[dict] = []
         for state in states:
             entity_id = str(state.get("entity_id", "")).lower()
-            # HACS custom nordpool: sensor.nordpool_kwh_se3_sek_*
-            # (Official HA nordpool is detected via config entries below)
-            if entity_id.startswith("sensor.nordpool_"):
+            # HACS/custom Nordpool sensors. Official HA nordpool is detected
+            # via config entries below; custom sensors are ranked after all
+            # states are known so empty template helpers do not win over the
+            # real nordpool_kwh_* entity.
+            if self._is_nordpool_price_entity_id(entity_id):
+                nordpool_states.append(state)
                 result["nordpool_found"] = True
-                if not result["nordpool_custom_entity"]:
-                    result["nordpool_custom_entity"] = state.get("entity_id")
                 if not result["nordpool_custom_area"]:
                     parsed_area = self._parse_nordpool_area_from_entity_id(entity_id)
                     if parsed_area:
@@ -2674,6 +2728,10 @@ class HomeAssistantAPIController:
             # Detect Octopus Energy from event entities
             if "octopus_energy" in entity_id and "rate" in entity_id:
                 result["octopus_found"] = True
+
+        result["nordpool_custom_entity"] = self.discover_nordpool_hacs_entity(
+            nordpool_states, registry
+        )
 
         # ── ENTSO-e Transparency Platform (e.g. Belpex) ───────────────────
         entsoe_entity = self.discover_entsoe_entity(registry, states)

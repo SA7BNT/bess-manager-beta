@@ -845,6 +845,43 @@ class TestMapRegistryEntities:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Nordpool custom entity discovery
+# ---------------------------------------------------------------------------
+
+
+class TestNordpoolEntityDiscovery:
+    def setup_method(self):
+        self.ctrl = _make_controller()
+
+    def test_prefers_real_nordpool_entity_over_empty_template(self):
+        states = [
+            {
+                "entity_id": "sensor.nordpool_energyprices_3",
+                "state": "unknown",
+                "attributes": {"prices": []},
+            },
+            {
+                "entity_id": "sensor.nordpool_kwh_se3_sek_3_10_025",
+                "state": "0.42",
+                "attributes": {"raw_today": [{"start": "2026-06-28T00:00:00+02:00"}]},
+            },
+        ]
+        registry = [
+            _entity("sensor.nordpool_energyprices_3", "template", "template-id"),
+            _entity(
+                "sensor.nordpool_kwh_se3_sek_3_10_025",
+                "nordpool",
+                "nordpool_kwh_se3_sek_3_10_025",
+            ),
+        ]
+
+        assert (
+            self.ctrl.discover_nordpool_hacs_entity(states, registry)
+            == "sensor.nordpool_kwh_se3_sek_3_10_025"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tests: discover_sensors_from_registry
 # ---------------------------------------------------------------------------
 

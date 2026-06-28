@@ -193,22 +193,21 @@ class HomeAssistantSource(PriceSource):
             )
 
         try:
-            # Fetch sensor data — today and tomorrow attributes live on the same entity
-            sensor_data_all = self._fetch_sensor_attributes(self.entity)
+            prices = self._get_prices_from_entity(self.entity, target_date)
+            if prices:
+                return prices
 
-            # Try both attribute sets on the single sensor
-            for sensor_data, sensor_name in [
-                (sensor_data_all, "today"),
-                (sensor_data_all, "tomorrow"),
-            ]:
-                if not sensor_data:
-                    continue
-
-                prices = self._extract_prices_for_date(
-                    sensor_data, target_date, sensor_name
-                )
+            fallback_entity = self._discover_fallback_entity()
+            if fallback_entity and fallback_entity != self.entity:
+                prices = self._get_prices_from_entity(fallback_entity, target_date)
                 if prices:
-                    logger.debug(f"Found {target_date} prices in {sensor_name} sensor")
+                    logger.warning(
+                        "Configured Nordpool entity %s has no usable prices; "
+                        "using discovered entity %s instead",
+                        self.entity,
+                        fallback_entity,
+                    )
+                    self.entity = fallback_entity
                     return prices
 
             # No prices found
@@ -221,6 +220,33 @@ class HomeAssistantSource(PriceSource):
                 date=target_date,
                 message=f"Failed to get price data for {target_date}: {e}",
             ) from e
+
+    def _get_prices_from_entity(self, entity_id: str, target_date: date) -> list | None:
+        sensor_data_all = self._fetch_sensor_attributes(entity_id)
+
+        # Try both attribute sets on the single sensor
+        for sensor_data, sensor_name in [
+            (sensor_data_all, "today"),
+            (sensor_data_all, "tomorrow"),
+        ]:
+            if not sensor_data:
+                continue
+
+            prices = self._extract_prices_for_date(sensor_data, target_date, sensor_name)
+            if prices:
+                logger.debug("Found %s prices in %s", target_date, entity_id)
+                return prices
+
+        return None
+
+    def _discover_fallback_entity(self) -> str | None:
+        discover = getattr(self.ha_controller, "discover_nordpool_hacs_entity", None)
+        if not callable(discover):
+            return None
+        try:
+            return discover()
+        except Exception:
+            return None
 
     def _fetch_sensor_attributes(self, entity_id: str):
         """Fetch attributes from the specified Nordpool sensor entity.
