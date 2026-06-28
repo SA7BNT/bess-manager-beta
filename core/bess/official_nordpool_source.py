@@ -11,7 +11,7 @@ from datetime import date, timedelta
 import requests
 
 from . import time_utils
-from .price_manager import PriceSource
+from .price_manager import PriceSource, normalize_prices_to_quarterly
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ class OfficialNordpoolSource(PriceSource):
             )
             logger.debug(f"Price range: {min(prices):.3f} - {max(prices):.3f} per kWh")
 
-            return prices
+            return normalize_prices_to_quarterly(prices)
 
         except Exception as e:
             if isinstance(e, ValueError):

@@ -476,3 +476,33 @@ class TestNordpoolServiceContract:
         first_call, second_call = ha_controller._service_call_with_retry.call_args_list
         assert first_call.kwargs["areas"] == ["SE4"]
         assert "areas" not in second_call.kwargs
+
+    def test_official_hourly_response_expands_to_quarterly(self):
+        """Official Nordpool hourly responses are normalized to 96 periods."""
+        from core.bess.official_nordpool_source import OfficialNordpoolSource
+
+        target_date = date(2026, 4, 13)
+        ha_controller = MagicMock()
+        ha_controller._service_call_with_retry.return_value = {
+            "service_response": {
+                "SE4": [
+                    {
+                        "start": f"{target_date}T{hour:02d}:00:00+00:00",
+                        "end": f"{target_date}T{hour + 1:02d}:00:00+00:00",
+                        "price": float(hour),
+                    }
+                    for hour in range(24)
+                ]
+            }
+        }
+        source = OfficialNordpoolSource(
+            ha_controller, "test-config-entry-id", 1.25, area="SE4"
+        )
+
+        with patch("core.bess.official_nordpool_source.time_utils") as mock_time:
+            mock_time.today.return_value = target_date
+            prices = source.get_prices_for_date(target_date)
+
+        assert len(prices) == 96
+        assert prices[:4] == [0.0, 0.0, 0.0, 0.0]
+        assert prices[4:8] == [0.001, 0.001, 0.001, 0.001]
