@@ -351,6 +351,37 @@ class BatterySystemManager:
         if provider == "nordpool_official":
             nordpool_official_config = config["nordpool_official"]
             config_entry_id = nordpool_official_config["config_entry_id"]
+            try:
+                official_service_available = controller.has_service(
+                    "nordpool", "get_prices_for_date"
+                )
+            except Exception as e:
+                official_service_available = True
+                logger.warning("Could not inspect Nordpool services: %s", e)
+
+            if not official_service_available:
+                hacs_config = config.get("nordpool_hacs", {})
+                hacs_entity = hacs_config.get("entity") or (
+                    controller.discover_nordpool_hacs_entity()
+                )
+                if hacs_entity:
+                    logger.warning(
+                        "Configured provider is nordpool_official, but HA does not "
+                        "expose nordpool.get_prices_for_date. Falling back to HACS "
+                        "Nordpool entity %s",
+                        hacs_entity,
+                    )
+                    return HomeAssistantSource(
+                        controller,
+                        vat_multiplier=self.price_settings.vat_multiplier,
+                        entity=hacs_entity,
+                    )
+                logger.warning(
+                    "Configured provider is nordpool_official, but HA does not "
+                    "expose nordpool.get_prices_for_date and no HACS Nordpool "
+                    "entity was discovered"
+                )
+
             price_source = OfficialNordpoolSource(
                 controller,
                 config_entry_id,

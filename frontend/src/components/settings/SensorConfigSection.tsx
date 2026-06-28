@@ -31,6 +31,7 @@ export interface DiscoveryResult {
   nordpoolCustomArea: string | null;
   nordpoolCustomEntity: string | null;
   nordpoolConfigEntryId: string | null;
+  nordpoolOfficialServiceFound?: boolean;
   octopusFound: boolean;
   octopusEntities?: {
     importToday?: string;

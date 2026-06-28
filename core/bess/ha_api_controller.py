@@ -2518,6 +2518,44 @@ class HomeAssistantAPIController:
             raise SystemConfigurationError("HA /api/states returned no data")
         return states
 
+    def has_service(self, domain: str, service: str) -> bool:
+        """Return whether Home Assistant exposes a service action."""
+        services = self._api_request(
+            "get",
+            "/api/services",
+            operation="Fetch Home Assistant services",
+            category="config",
+        )
+        if isinstance(services, list):
+            for entry in services:
+                if entry.get("domain") != domain:
+                    continue
+                domain_services = entry.get("services", {})
+                return service in domain_services
+            return False
+
+        if isinstance(services, dict):
+            domain_services = services.get(domain, {})
+            if isinstance(domain_services, dict):
+                return service in domain_services
+            if isinstance(domain_services, list):
+                return service in domain_services
+
+        return False
+
+    def discover_nordpool_hacs_entity(
+        self, states: list[dict] | None = None
+    ) -> str | None:
+        """Discover the HACS/custom Nordpool sensor entity from HA states."""
+        if states is None:
+            states = self._fetch_all_states()
+
+        for state in states:
+            entity_id = str(state.get("entity_id", ""))
+            if entity_id.lower().startswith("sensor.nordpool_"):
+                return entity_id
+        return None
+
     # Maps Nordpool area code prefix → (currency, vat_multiplier).
     # These are approximate defaults used to pre-fill the setup wizard;
     # users should verify and adjust for their actual tax situation.
@@ -2578,6 +2616,7 @@ class HomeAssistantAPIController:
             "nordpool_custom_area": None,
             "nordpool_custom_entity": None,
             "nordpool_config_entry_id": None,
+            "nordpool_official_service_found": False,
             "octopus_found": False,
             "entsoe_found": False,
             "entsoe_entity": None,
@@ -2657,6 +2696,13 @@ class HomeAssistantAPIController:
                 result["octopus_found"] = True
         except Exception as e:
             logger.warning("Failed to parse config entries / device registry: %s", e)
+
+        try:
+            result["nordpool_official_service_found"] = self.has_service(
+                "nordpool", "get_prices_for_date"
+            )
+        except Exception as e:
+            logger.warning("Failed to inspect Home Assistant services: %s", e)
 
         # ── Auto-detected hints ───────────────────────────────────────────
         # Build a list of all detected platforms — no magic selection.

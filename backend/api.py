@@ -2881,7 +2881,13 @@ def _pricing_defaults_for_discovery(integrations: dict) -> dict:
         return _PROVIDER_PRICING_DEFAULTS["octopus"]
     if integrations.get("entsoe_found") and not integrations.get("nordpool_found"):
         return _PROVIDER_PRICING_DEFAULTS["entsoe"]
-    if integrations.get("nordpool_config_entry_id"):
+    if integrations.get("nordpool_custom_entity") and not integrations.get(
+        "nordpool_official_service_found"
+    ):
+        return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
+    if integrations.get("nordpool_config_entry_id") and integrations.get(
+        "nordpool_official_service_found"
+    ):
         return _PROVIDER_PRICING_DEFAULTS["nordpool_official"]
     if integrations.get("nordpool_custom_area"):
         return _PROVIDER_PRICING_DEFAULTS["nordpool_hacs"]
@@ -3045,6 +3051,9 @@ async def run_setup_discovery():
                 "nordpool_custom_area": integrations.get("nordpool_custom_area"),
                 "nordpool_custom_entity": integrations.get("nordpool_custom_entity"),
                 "nordpool_config_entry_id": integrations["nordpool_config_entry_id"],
+                "nordpool_official_service_found": integrations.get(
+                    "nordpool_official_service_found", False
+                ),
                 "octopus_found": integrations["octopus_found"],
                 "entsoe_found": integrations.get("entsoe_found", False),
                 "entsoe_entity": integrations.get("entsoe_entity"),

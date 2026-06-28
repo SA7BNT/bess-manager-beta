@@ -95,10 +95,11 @@ const SetupWizardPage: React.FC = () => {
         setHomeForm(f => ({ ...f, phaseCount: d.detectedPhaseCount! }));
       }
       // Auto-select pricing provider based on discovered integrations.
-      // When the official HA Nordpool integration is present (has a
-      // config_entry_id), prefer it.  Otherwise fall back to HACS custom.
-      const hasOfficialNordpool = !!d.nordpoolConfigEntryId;
-      const hasCustomNordpool = !!d.nordpoolCustomArea;
+      // Prefer official Nordpool only when the official service action exists.
+      // HACS/custom Nordpool can also expose a config entry but lacks
+      // nordpool.get_prices_for_date.
+      const hasOfficialNordpool = !!d.nordpoolConfigEntryId && !!d.nordpoolOfficialServiceFound;
+      const hasCustomNordpool = !!d.nordpoolCustomEntity || !!d.nordpoolCustomArea;
       const autoProvider = d.octopusFound && !d.nordpoolFound
         ? 'octopus' as const
         : d.entsoeFound && !d.nordpoolFound
@@ -109,7 +110,7 @@ const SetupWizardPage: React.FC = () => {
               ? 'nordpool_hacs' as const
               : undefined;
       // Use area from the matching integration — not mixed
-      const autoArea = hasOfficialNordpool ? d.nordpoolArea : d.nordpoolCustomArea;
+      const autoArea = hasOfficialNordpool ? d.nordpoolArea : (d.nordpoolCustomArea || d.nordpoolArea);
       setPricingForm(f => ({
         ...f,
         ...(d.pricingDefaults ?? {}),
