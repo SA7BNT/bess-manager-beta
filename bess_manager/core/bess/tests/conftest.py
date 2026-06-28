@@ -1,0 +1,1088 @@
+"""Shared test fixtures and utilities for battery system integration tests."""
+
+import logging
+import os
+import sys
+from datetime import datetime
+
+import pytest  # type: ignore
+
+# Add the project root to Python path BEFORE any other imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from core.bess.battery_system_manager import BatterySystemManager  # noqa: E402
+from core.bess.ha_api_controller import HomeAssistantAPIController  # noqa: E402
+from core.bess.models import (  # noqa: E402
+    DecisionData,
+    EconomicData,
+    EnergyData,
+    PeriodData,
+)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class MockHomeAssistantController(HomeAssistantAPIController):
+    """Mock Home Assistant controller for testing."""
+
+    def _resolve_entity_id(self, sensor_key: str):
+        """Mock entity ID resolution: use configured sensors, fall back to dummy ID."""
+        entity_id = self.sensors.get(sensor_key)
+        if entity_id:
+            return entity_id, "configured"
+        return f"sensor.{sensor_key}", "mock"
+
+    def validate_methods_sensors(self, method_list: list) -> list:
+        """Return 'ok' status for all methods without making HTTP calls."""
+        results = []
+        for method_name in method_list:
+            method_info = self.METHOD_SENSOR_MAP.get(method_name, {})
+            results.append(
+                {
+                    "method_name": method_name,
+                    "name": method_info.get("name", method_name),
+                    "sensor_key": method_info.get("sensor_key", method_name),
+                    "entity_id": f"sensor.{method_info.get('sensor_key', method_name)}",
+                    "status": "ok",
+                    "error": None,
+                    "current_value": "0",
+                    "resolution_method": "mock",
+                }
+            )
+        return results
+
+    def __init__(self) -> None:
+        """Initialize with default settings."""
+        self.failure_tracker = None
+        self.growatt_device_id = None
+        self.sensors: dict[str, str] = {}
+        self.settings = {
+            "grid_charge": False,
+            "discharge_rate": 0,
+            "battery_soc": 50,
+            "consumption": 4.5,
+            "charge_power": 0,
+            "discharge_power": 0,
+            "l1_current": 10.0,
+            "l2_current": 8.0,
+            "l3_current": 12.0,
+            "charge_stop_soc": 100,
+            "discharge_stop_soc": 10,
+            "charging_power_rate": 40,
+            "test_mode": False,
+            "tou_settings": [],
+            "battery_charge_today": 0.0,
+            "battery_discharge_today": 0.0,
+            "solar_generation_today": 0.0,
+            "self_consumption_today": 0.0,
+            "export_to_grid_today": 0.0,
+            "load_consumption_today": 0.0,
+            "import_from_grid_today": 0.0,
+            "grid_to_battery_today": 0.0,
+            "ev_energy_today": 0.0,
+        }
+
+        # Configurable forecasts for testing (quarterly resolution: 96 periods)
+        # Default: 4.5 kWh/hour = 1.125 kWh per quarter-hour
+        self.consumption_forecast = [1.125] * 96
+        self.solar_forecast = [0.0] * 96
+        self.solar_forecast_tomorrow = [0.0] * 96
+
+        # SolaX VPP entity mappings (needed for entity resolution)
+        self.sensors.update(
+            {
+                "solax_power_control_mode": "select.solax_remotecontrol_power_control",
+                "solax_active_power": "number.solax_remotecontrol_active_power",
+                "solax_autorepeat_duration": "number.solax_remotecontrol_autorepeat_duration",
+                "solax_power_control_trigger": "button.solax_remotecontrol_trigger",
+                "solax_battery_min_soc": "number.solax_battery_minimum_capacity",
+            }
+        )
+
+        # Configurable response for HA Statistics API mock
+        self._statistics_response: dict = {}
+
+        # Call tracking for integration tests
+        self.calls = {
+            "grid_charge": [],
+            "discharge_rate": [],
+            "charge_rate": [],
+            "tou_segments": [],
+            # SPH
+            "ac_charge_times": [],
+            "ac_discharge_times": [],
+            # SolaX
+            "vpp_calls": [],
+            "vpp_disabled": [],
+            "min_soc": [],
+        }
+
+    # Required methods for Home Assistant Controller interface
+    def get_battery_soc(self):
+        """Get the current battery state of charge."""
+        return self.settings["battery_soc"]
+
+    def get_current_consumption(self):
+        """Get the current home consumption."""
+        return self.settings["consumption"]
+
+    def get_estimated_consumption(self):
+        """Get estimated consumption in quarterly resolution (96 periods)."""
+        return self.consumption_forecast
+
+    def get_solar_forecast(self, day_offset=0):  # type: ignore[unused-argument]
+        """Get solar forecast data in quarterly resolution (96 periods)."""
+        return self.solar_forecast
+
+    def get_solar_forecast_tomorrow(self):
+        """Get solar forecast for tomorrow in quarterly resolution (96 periods)."""
+        return self.solar_forecast_tomorrow
+
+    def grid_charge_enabled(self):
+        """Check if grid charging is enabled."""
+        return self.settings["grid_charge"]
+
+    def set_grid_charge(self, enable):
+        """Enable or disable grid charging."""
+        self.settings["grid_charge"] = enable
+        self.calls["grid_charge"].append(enable)
+
+    def get_solar_generation(self):
+        """Get the current solar generation value."""
+        return self.settings.get("solar_value", 0.0)
+
+    def get_battery_charge_power(self):
+        """Get the current battery charge power."""
+        return self.settings["charge_power"]
+
+    def get_battery_discharge_power(self):
+        """Get the current battery discharge power."""
+        return self.settings["discharge_power"]
+
+    def set_discharging_power_rate(self, rate):
+        """Set the discharging power rate."""
+        self.settings["discharge_rate"] = rate
+        self.calls["discharge_rate"].append(rate)
+
+    def get_l1_current(self):
+        """Get L1 phase current."""
+        return self.settings["l1_current"]
+
+    def get_l2_current(self):
+        """Get L2 phase current."""
+        return self.settings["l2_current"]
+
+    def get_l3_current(self):
+        """Get L3 phase current."""
+        return self.settings["l3_current"]
+
+    def get_charge_stop_soc(self):
+        """Get charge stop SOC setting."""
+        return self.settings["charge_stop_soc"]
+
+    def get_discharge_stop_soc(self):
+        """Get discharge stop SOC setting."""
+        return self.settings["discharge_stop_soc"]
+
+    def get_charging_power_rate(self):
+        """Get charging power rate setting."""
+        return self.settings["charging_power_rate"]
+
+    def get_discharging_power_rate(self):
+        """Get discharging power rate setting."""
+        return self.settings["discharge_rate"]
+
+    def set_charge_stop_soc(self, soc):
+        """Set charge stop SOC."""
+        self.settings["charge_stop_soc"] = soc
+
+    def set_discharge_stop_soc(self, soc):
+        """Set discharge stop SOC."""
+        self.settings["discharge_stop_soc"] = soc
+
+    def is_test_mode(self):
+        """Check if test mode is enabled."""
+        return self.settings["test_mode"]
+
+    def get_discharge_inhibit_active(self) -> bool:
+        """Mock discharge inhibit — always inactive in tests."""
+        return False
+
+    def get_tou_settings(self):
+        """Get TOU settings."""
+        return self.settings["tou_settings"]
+
+    # Additional methods for integration tests
+    def set_charging_power_rate(self, rate):
+        """Set battery charge power rate."""
+        self.settings["charge_rate"] = rate
+        self.calls["charge_rate"].append(rate)
+        # Match base class return type (None)
+        return None
+
+    def set_inverter_time_segment(
+        self, segment_id, batt_mode, start_time, end_time, enabled, **kwargs
+    ):
+        """Set TOU time segment on inverter."""
+        self.calls["tou_segments"].append(
+            {
+                "segment_id": segment_id,
+                "batt_mode": batt_mode,
+                "start_time": start_time,
+                "end_time": end_time,
+                "enabled": enabled,
+            }
+        )
+        # Match base class return type (None)
+        return None
+
+    def read_inverter_time_segments(self):
+        """Read current TOU segments from inverter."""
+        return []
+
+    # Growatt solax_modbus TOU entity methods (used by SolaxModbusGrowattController)
+
+    def set_tou_segment_via_entities(
+        self, segment_id, batt_mode, start_time, end_time, enabled, **kwargs
+    ):
+        """Set TOU time segment via solax_modbus entity writes."""
+        self.calls["tou_segments"].append(
+            {
+                "segment_id": segment_id,
+                "batt_mode": batt_mode,
+                "start_time": start_time,
+                "end_time": end_time,
+                "enabled": enabled,
+            }
+        )
+        return None
+
+    def read_tou_segments_from_entities(self):
+        """Read TOU segments from solax_modbus entity states."""
+        return []
+
+    # SPH methods (used by GrowattSphController)
+
+    def write_ac_charge_times(
+        self,
+        charge_power: int,
+        charge_stop_soc: int,
+        mains_enabled: bool,
+        **period_params: str | bool,
+    ) -> None:
+        """Record AC charge time write."""
+        self.calls["ac_charge_times"].append(
+            {
+                "charge_power": charge_power,
+                "charge_stop_soc": charge_stop_soc,
+                "mains_enabled": mains_enabled,
+                **period_params,
+            }
+        )
+
+    def read_ac_charge_times(self) -> dict:
+        """Read current AC charge time periods."""
+        return {
+            "charge_power": 100,
+            "charge_stop_soc": 100,
+            "mains_enabled": False,
+            "periods": [],
+        }
+
+    def write_ac_discharge_times(
+        self,
+        discharge_power: int,
+        discharge_stop_soc: int,
+        **period_params: str | bool,
+    ) -> None:
+        """Record AC discharge time write."""
+        self.calls["ac_discharge_times"].append(
+            {
+                "discharge_power": discharge_power,
+                "discharge_stop_soc": discharge_stop_soc,
+                **period_params,
+            }
+        )
+
+    def read_ac_discharge_times(self) -> dict:
+        """Read current AC discharge time periods."""
+        return {
+            "discharge_power": 100,
+            "discharge_stop_soc": 10,
+            "periods": [],
+        }
+
+    # SolaX methods (used by SolaxController)
+
+    def set_solax_active_power_control(self, watts: int) -> None:
+        """Record VPP active power control command."""
+        self.calls["vpp_calls"].append(watts)
+
+    def set_solax_vpp_disabled(self) -> None:
+        """Record VPP disable command."""
+        self.calls["vpp_disabled"].append(True)
+
+    def set_solax_min_soc(self, min_soc: int) -> None:
+        """Record SolaX min SOC write."""
+        self.calls["min_soc"].append(min_soc)
+
+    def get_solax_power_control_mode(self) -> str | None:
+        """Return mock power control mode."""
+        return "Self Use Mode"
+
+    def get_statistics_during_period(
+        self, statistic_ids, start_time, end_time=None, period="hour", types=None
+    ):
+        """Mock HA Statistics API — returns configurable data or empty."""
+        return self._statistics_response
+
+    def find_statistic_id(self, entity_id):
+        """Mock statistic_id discovery — returns entity_id unchanged."""
+        return entity_id
+
+
+class MockSensorCollector:
+    """Mock sensor collector for integration tests - replaces InfluxDB dependency."""
+
+    def __init__(self, controller, battery_capacity_kwh):
+        """Initialize mock sensor collector."""
+        self.controller = controller
+        self.battery_capacity = battery_capacity_kwh
+
+    def collect_hour_flows(self, hour):
+        """Return realistic energy flow data for the given hour."""
+        # Use controller's existing forecasts (which tests can configure)
+        solar = (
+            self.controller.solar_forecast[hour]
+            if hour < len(self.controller.solar_forecast)
+            else 0.0
+        )
+        consumption = (
+            self.controller.consumption_forecast[hour]
+            if hour < len(self.controller.consumption_forecast)
+            else 4.0
+        )
+
+        # Simple energy balance calculation
+        solar_excess = max(0, solar - consumption)
+        grid_import = max(0, consumption - solar)
+
+        return {
+            "battery_soc": self.controller.get_battery_soc(),
+            "battery_soe": self.controller.get_battery_soc()
+            * self.battery_capacity
+            / 100,
+            "solar_production": solar,
+            "load_consumption": consumption,
+            "import_from_grid": grid_import,
+            "export_to_grid": solar_excess,
+            "battery_charged": 0.0,
+            "battery_discharged": 0.0,
+            "strategic_intent": "IDLE",
+        }
+
+    def reconstruct_historical_flows(self, start_hour, end_hour):  # type: ignore[unused-argument]
+        """Mock historical reconstruction - return empty for testing."""
+        return {}
+
+
+# MOCK CONTROLLER FIXTURE
+@pytest.fixture
+def mock_controller():
+    """Provide a configured mock Home Assistant controller."""
+    return MockHomeAssistantController()
+
+
+@pytest.fixture
+def mock_controller_with_params():
+    """Provide a configurable mock controller with preset test parameters."""
+
+    def _create(consumption=None, battery_soc=None):
+        controller = MockHomeAssistantController()
+        if consumption:
+            controller.consumption_forecast = consumption
+        if battery_soc is not None:
+            controller.settings["battery_soc"] = battery_soc
+        return controller
+
+    return _create
+
+
+# RAW PRICE DATA FIXTURES (keep these - used by scenario files and tests)
+@pytest.fixture
+def price_data_2024_08_16():
+    """Raw price data from 2024-08-16 with high price spread."""
+    return [
+        0.9827,
+        0.8419,
+        0.0321,
+        0.0097,
+        0.0098,
+        0.9136,
+        1.4433,
+        1.5162,
+        1.4029,
+        1.1346,
+        0.8558,
+        0.6485,
+        0.2895,
+        0.1363,
+        0.1253,
+        0.6200,
+        0.8880,
+        1.1662,
+        1.5163,
+        2.5908,
+        2.7325,
+        1.9312,
+        1.5121,
+        1.3056,
+    ]
+
+
+@pytest.fixture
+def price_data_2025_01_05():
+    """Raw price data from 2025-01-05 with insufficient price spread."""
+    return [
+        0.780,
+        0.790,
+        0.800,
+        0.830,
+        0.950,
+        0.970,
+        1.160,
+        1.170,
+        1.220,
+        1.280,
+        1.210,
+        1.300,
+        1.200,
+        1.130,
+        0.980,
+        0.740,
+        0.730,
+        0.950,
+        0.920,
+        0.740,
+        0.530,
+        0.530,
+        0.500,
+        0.400,
+    ]
+
+
+@pytest.fixture
+def price_data_2025_01_12():
+    """Raw price data from 2025-01-12 with evening peak."""
+    return [
+        0.357,
+        0.301,
+        0.289,
+        0.349,
+        0.393,
+        0.405,
+        0.412,
+        0.418,
+        0.447,
+        0.605,
+        0.791,
+        0.919,
+        0.826,
+        0.779,
+        1.066,
+        1.332,
+        1.492,
+        1.583,
+        1.677,
+        1.612,
+        1.514,
+        1.277,
+        0.829,
+        0.481,
+    ]
+
+
+@pytest.fixture
+def price_data_2025_01_13():
+    """Raw price data from 2025-01-13 with night low."""
+    return [
+        0.477,
+        0.447,
+        0.450,
+        0.438,
+        0.433,
+        0.422,
+        0.434,
+        0.805,
+        1.180,
+        0.654,
+        0.454,
+        0.441,
+        0.433,
+        0.425,
+        0.410,
+        0.399,
+        0.402,
+        0.401,
+        0.379,
+        0.347,
+        0.067,
+        0.023,
+        0.018,
+        0.000,
+    ]
+
+
+# SIMPLE TEST DATA FIXTURES (for unit tests)
+@pytest.fixture
+def sample_price_data(price_data_2024_08_16):
+    """
+    Provide sample price data for unit tests.
+    Uses the 2024-08-16 data for consistency with original unit tests.
+    """
+    base_prices = price_data_2024_08_16
+    return {"buy_price": base_prices, "sell_price": [p * 0.7 for p in base_prices]}
+
+
+@pytest.fixture
+def sample_consumption_data():
+    """
+    Provide sample consumption data for unit tests.
+    Uses constant 5.2 kWh per hour, matching original unit tests.
+    """
+    return [5.2] * 24
+
+
+@pytest.fixture
+def sample_solar_data():
+    """
+    Provide sample solar production data for unit tests.
+    Uses representative solar curve (zero at night, peak at noon).
+    """
+    return [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.8,
+        2.3,
+        3.7,
+        4.8,
+        5.5,
+        5.8,
+        5.8,
+        5.3,
+        4.4,
+        3.3,
+        1.9,
+        0.9,
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+
+
+# SYSTEM CONFIGURATION FIXTURES
+_DEFAULT_TEST_ADDON_OPTIONS: dict = {"inverter": {"platform": "growatt_server_min"}}
+
+
+@pytest.fixture
+def base_system(mock_controller):
+    """Provide a clean system instance with mock controller."""
+    from core.bess.price_manager import MockSource
+
+    return BatterySystemManager(
+        controller=mock_controller,
+        price_source=MockSource([1.0] * 96),
+        addon_options=_DEFAULT_TEST_ADDON_OPTIONS,
+    )
+
+
+@pytest.fixture
+def arbitrage_prices():
+    """Price data that creates clear arbitrage opportunities for integration tests."""
+    return [
+        # Night - very cheap (arbitrage opportunity)
+        0.10,
+        0.10,
+        0.10,
+        # Early morning - rising
+        0.20,
+        0.30,
+        0.40,
+        # Day - moderate
+        0.60,
+        0.80,
+        1.00,
+        # Peak hours - expensive (discharge opportunity)
+        1.50,
+        1.80,
+        2.00,
+        # Afternoon - falling
+        1.50,
+        1.20,
+        1.00,
+        # Evening - moderate
+        0.80,
+        0.60,
+        0.40,
+        # Evening peak - moderate
+        0.50,
+        0.60,
+        0.70,
+        # Late night - cheap again
+        0.30,
+        0.20,
+        0.10,
+    ]
+
+
+@pytest.fixture
+def realistic_consumption_pattern():
+    """Realistic consumption pattern for integration tests."""
+    return [
+        4.5,
+        4.2,
+        4.0,
+        3.8,
+        3.5,
+        3.2,  # Night hours 0-5
+        3.8,
+        4.5,
+        5.2,
+        6.0,
+        6.5,
+        7.0,  # Morning rise 6-11
+        7.2,
+        6.8,
+        6.5,
+        6.2,
+        5.8,
+        5.5,  # Afternoon 12-17
+        5.8,
+        6.2,
+        6.5,
+        5.8,
+        5.2,
+        4.8,  # Evening 18-23
+    ]
+
+
+@pytest.fixture
+def realistic_solar_pattern():
+    """Realistic solar pattern for integration tests."""
+    return [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,  # Night 0-5
+        0.5,
+        2.0,
+        4.0,
+        6.0,
+        8.0,
+        9.0,  # Morning rise 6-11
+        9.5,
+        9.0,
+        8.0,
+        6.5,
+        4.5,
+        2.5,  # Afternoon 12-17
+        1.0,
+        0.2,
+        0.0,
+        0.0,
+        0.0,
+        0.0,  # Evening/Night 18-23
+    ]
+
+
+@pytest.fixture
+def battery_system_integration(mock_controller, monkeypatch):
+    """Create BatterySystemManager for integration tests with minimal external mocking."""
+    from core.bess.price_manager import MockSource
+
+    # Mock only external dependencies
+    monkeypatch.setattr(
+        "core.bess.sensor_collector.SensorCollector", MockSensorCollector
+    )
+
+    # Use MockSource for price data (replaces external price API)
+    price_source = MockSource([1.0] * 24)
+
+    # Create system with real internal components
+    system = BatterySystemManager(
+        controller=mock_controller,
+        price_source=price_source,
+        addon_options=_DEFAULT_TEST_ADDON_OPTIONS,
+    )
+
+    return system
+
+
+@pytest.fixture
+def battery_system_with_arbitrage(mock_controller, arbitrage_prices, monkeypatch):
+    """Create BatterySystemManager with arbitrage price opportunities."""
+    from core.bess.price_manager import MockSource
+
+    # Mock external dependencies
+    monkeypatch.setattr(
+        "core.bess.sensor_collector.SensorCollector", MockSensorCollector
+    )
+
+    # Use arbitrage prices
+    price_source = MockSource(arbitrage_prices)
+
+    system = BatterySystemManager(
+        controller=mock_controller,
+        price_source=price_source,
+        addon_options=_DEFAULT_TEST_ADDON_OPTIONS,
+    )
+
+    return system
+
+
+@pytest.fixture(
+    params=[
+        "growatt_server_min",
+        "solax_modbus_growatt_min",
+        "growatt_server_sph",
+        "solax_modbus_native",
+        "solis_modbus",
+    ]
+)
+def platform_system(request, mock_controller, arbitrage_prices, monkeypatch):
+    """Create BatterySystemManager parametrized across all inverter platforms.
+
+    Each test using this fixture runs 4 times — once per platform.
+    Uses the production code path via addon_options["inverter"]["platform"].
+    """
+    from core.bess.price_manager import MockSource
+
+    monkeypatch.setattr(
+        "core.bess.sensor_collector.SensorCollector", MockSensorCollector
+    )
+
+    platform = request.param
+    price_source = MockSource(arbitrage_prices)
+    addon_options = {"inverter": {"platform": platform}}
+
+    system = BatterySystemManager(
+        controller=mock_controller,
+        price_source=price_source,
+        addon_options=addon_options,
+    )
+    return system
+
+
+@pytest.fixture
+def sample_new_hourly_data():
+    """Provide sample PeriodData object for testing."""
+    energy_data = EnergyData(
+        solar_production=5.0,
+        home_consumption=3.0,
+        grid_imported=0.0,
+        grid_exported=2.0,
+        battery_charged=0.0,
+        battery_discharged=0.0,
+        battery_soe_start=25.0,  # 50% SOC = 25 kWh (assuming 50 kWh battery)
+        battery_soe_end=25.0,  # 50% SOC = 25 kWh (assuming 50 kWh battery)
+    )
+
+    economic_data = EconomicData(
+        buy_price=1.2,
+        sell_price=0.8,
+        hourly_cost=0.0,
+        hourly_savings=2.4,
+        battery_cycle_cost=0.0,
+        grid_only_cost=2.4,
+        solar_only_cost=2.4,
+    )
+
+    decision_data = DecisionData(strategic_intent="IDLE", battery_action=0.0)
+
+    return PeriodData(
+        period=12,
+        energy=energy_data,
+        economic=economic_data,
+        decision=decision_data,
+        timestamp=datetime(2025, 7, 2, 12, 0, 0),
+        data_source="actual",  # Changed to "actual" for integration tests
+    )
+
+
+# Aliases for backward compatibility with new test files
+@pytest.fixture
+def battery_system(battery_system_integration):
+    """Alias for integration test compatibility."""
+    return battery_system_integration
+
+
+@pytest.fixture
+def quarterly_battery_system(mock_controller, quarterly_arbitrage_prices, monkeypatch):
+    """Create BatterySystemManager for quarterly resolution testing (96 periods)."""
+    from core.bess.price_manager import MockSource
+
+    # Mock external dependencies
+    monkeypatch.setattr(
+        "core.bess.sensor_collector.SensorCollector", MockSensorCollector
+    )
+
+    # Use quarterly prices (96 periods)
+    price_source = MockSource(quarterly_arbitrage_prices)
+
+    system = BatterySystemManager(
+        controller=mock_controller,
+        price_source=price_source,
+        addon_options=_DEFAULT_TEST_ADDON_OPTIONS,
+    )
+
+    return system
+
+
+# QUARTERLY RESOLUTION TEST UTILITIES
+
+
+def expand_hourly_to_quarterly(hourly_data: list) -> list:
+    """Expand 24 hourly values to 96 quarterly (15-minute) values.
+
+    Each hourly value is repeated 4 times to create quarterly periods.
+    This is the simplest expansion strategy - more sophisticated
+    interpolation could be added if needed.
+
+    Args:
+        hourly_data: List of 24 hourly values
+
+    Returns:
+        List of 96 quarterly values
+    """
+    if len(hourly_data) != 24:
+        raise ValueError(f"Expected 24 hourly values, got {len(hourly_data)}")
+    return [val for val in hourly_data for _ in range(4)]
+
+
+@pytest.fixture
+def quarterly_arbitrage_prices():
+    """Quarterly version of arbitrage_prices fixture (96 periods).
+
+    Expands the hourly arbitrage prices to quarterly resolution.
+    Use this for testing quarterly system behavior.
+    """
+    hourly_prices = [
+        0.10,
+        0.10,
+        0.10,
+        0.10,
+        0.15,
+        0.20,
+        0.30,
+        0.50,
+        0.80,
+        1.20,
+        1.50,
+        1.80,
+        2.00,
+        1.80,
+        1.60,
+        1.40,
+        1.20,
+        1.00,
+        0.80,
+        0.60,
+        0.40,
+        0.30,
+        0.20,
+        0.15,
+    ]
+    return expand_hourly_to_quarterly(hourly_prices)
+
+
+@pytest.fixture
+def quarterly_consumption():
+    """Quarterly consumption forecast (96 periods).
+
+    Typical daily consumption pattern expanded to quarterly resolution.
+    """
+    hourly_consumption = [
+        0.5,
+        0.4,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.6,
+        1.0,
+        1.5,
+        2.0,
+        2.5,
+        2.5,
+        2.0,
+        1.8,
+        1.6,
+        1.8,
+        2.0,
+        2.5,
+        3.0,
+        2.5,
+        2.0,
+        1.5,
+        1.0,
+        0.7,
+    ]
+    return expand_hourly_to_quarterly(hourly_consumption)
+
+
+@pytest.fixture
+def quarterly_solar():
+    """Quarterly solar production forecast (96 periods).
+
+    Typical solar production curve expanded to quarterly resolution.
+    """
+    hourly_solar = [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.1,
+        0.3,
+        0.8,
+        1.5,
+        2.5,
+        3.5,
+        4.0,
+        4.5,
+        4.0,
+        3.5,
+        2.5,
+        1.5,
+        0.8,
+        0.3,
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    return expand_hourly_to_quarterly(hourly_solar)
+
+
+@pytest.fixture
+def quarterly_test_scenario():
+    """Complete quarterly test scenario with all required data.
+
+    This provides 96-period test data for testing the quarterly system.
+    Use this for new tests that need to validate quarterly behavior.
+
+    Returns:
+        dict with keys:
+            - buy_prices: 96 quarterly buy prices
+            - sell_prices: 96 quarterly sell prices
+            - consumption: 96 quarterly consumption forecast
+            - solar: 96 quarterly solar forecast
+            - initial_soe: Initial state of energy (kWh)
+            - initial_cost_basis: Initial cost basis (SEK/kWh)
+            - expected_periods: Expected number of periods (96)
+            - resolution: "quarterly"
+    """
+    hourly_buy = [
+        0.30,
+        0.20,
+        0.10,
+        0.10,
+        0.20,
+        1.50,
+        2.80,
+        3.50,
+        0.80,
+        0.40,
+        0.30,
+        0.20,
+        0.10,
+        0.40,
+        2.00,
+        3.00,
+        3.80,
+        4.00,
+        3.50,
+        2.80,
+        1.50,
+        0.70,
+        0.40,
+        0.30,
+    ]
+    hourly_sell = hourly_buy  # Same for simplicity
+    hourly_consumption = [
+        0.8,
+        0.7,
+        0.6,
+        0.5,
+        0.5,
+        0.7,
+        1.5,
+        2.5,
+        3.0,
+        2.0,
+        1.5,
+        2.0,
+        2.5,
+        1.8,
+        2.0,
+        2.5,
+        3.5,
+        4.5,
+        5.0,
+        4.5,
+        3.5,
+        2.5,
+        1.5,
+        1.0,
+    ]
+    hourly_solar = [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.1,
+        0.3,
+        0.7,
+        1.2,
+        0.5,
+        2.5,
+        0.8,
+        3.0,
+        1.5,
+        2.8,
+        0.6,
+        1.2,
+        0.7,
+        0.3,
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+
+    return {
+        "buy_prices": expand_hourly_to_quarterly(hourly_buy),
+        "sell_prices": expand_hourly_to_quarterly(hourly_sell),
+        "consumption": expand_hourly_to_quarterly(hourly_consumption),
+        "solar": expand_hourly_to_quarterly(hourly_solar),
+        "initial_soe": 3.0,
+        "initial_cost_basis": 0.4,
+        "expected_periods": 96,
+        "resolution": "quarterly",
+    }
