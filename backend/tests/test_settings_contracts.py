@@ -28,6 +28,7 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 import settings_store as _sm
 from api_conversion import (
     BATTERY_STORE_TO_API,
@@ -356,3 +357,44 @@ class TestNordpoolServiceContract:
         ha_controller = self._call_nordpool(date(2026, 4, 13), area="XX99")
         kwargs = ha_controller._service_call_with_retry.call_args.kwargs
         assert "areas" not in kwargs
+
+    def test_bad_area_payload_retries_without_area(self):
+        """If HA rejects the explicit area selector, retry with integration default."""
+        from core.bess.official_nordpool_source import OfficialNordpoolSource
+
+        target_date = date(2026, 4, 13)
+        response = requests.Response()
+        response.status_code = 400
+        response._content = b'{"message":"invalid area"}'
+        error = requests.HTTPError("400 Client Error: Bad Request")
+        error.response = response
+
+        ha_controller = MagicMock()
+        ha_controller._service_call_with_retry.side_effect = [
+            error,
+            {
+                "service_response": {
+                    "SE4": [
+                        {
+                            "start": f"{target_date}T22:00:00+00:00",
+                            "end": f"{target_date}T23:00:00+00:00",
+                            "price": 612.0,
+                        }
+                    ]
+                    * 96
+                }
+            },
+        ]
+
+        source = OfficialNordpoolSource(
+            ha_controller, "test-config-entry-id", 1.25, area="SE4"
+        )
+
+        with patch("core.bess.official_nordpool_source.time_utils") as mock_time:
+            mock_time.today.return_value = target_date
+            prices = source.get_prices_for_date(target_date)
+
+        assert prices
+        first_call, second_call = ha_controller._service_call_with_retry.call_args_list
+        assert first_call.kwargs["areas"] == ["SE4"]
+        assert "areas" not in second_call.kwargs

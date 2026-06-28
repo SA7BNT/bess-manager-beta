@@ -8,6 +8,8 @@ instead of sensor attributes, providing compatibility with the core integration.
 import logging
 from datetime import date, timedelta
 
+import requests
+
 from . import time_utils
 from .price_manager import PriceSource
 
@@ -63,6 +65,25 @@ def _normalize_official_area(area: str) -> str | None:
         area,
     )
     return None
+
+
+def _http_error_details(error: Exception) -> str:
+    """Return useful HTTP response details for Home Assistant service failures."""
+    if not isinstance(error, requests.HTTPError) or error.response is None:
+        return str(error)
+
+    body = (error.response.text or "").strip()
+    if body:
+        return f"{error} - response: {body[:500]}"
+    return str(error)
+
+
+def _is_bad_request(error: Exception) -> bool:
+    return (
+        isinstance(error, requests.HTTPError)
+        and error.response is not None
+        and error.response.status_code == 400
+    )
 
 
 class OfficialNordpoolSource(PriceSource):
@@ -123,6 +144,7 @@ class OfficialNordpoolSource(PriceSource):
                 f"Official Nordpool integration only supports today and tomorrow, not {target_date}"
             )
 
+        last_error: Exception | None = None
         try:
             # Call the nordpool.get_prices_for_date service
             date_str = target_date.strftime("%Y-%m-%d")
@@ -135,13 +157,38 @@ class OfficialNordpoolSource(PriceSource):
             if service_area:
                 service_data["areas"] = [service_area]
 
-            # Make service call
-            response = self.ha_controller._service_call_with_retry(
-                "nordpool",
-                "get_prices_for_date",
-                **service_data,
-                return_response=True,
-            )
+            # Make service call. Some HA/Nordpool versions are strict about
+            # area selector values, so fall back to the integration's configured
+            # default area if an explicit area is rejected.
+            call_attempts = [service_data]
+            if "areas" in service_data:
+                fallback_data = {
+                    "config_entry": self.config_entry_id,
+                    "date": date_str,
+                }
+                call_attempts.append(fallback_data)
+
+            response = None
+            for attempt_data in call_attempts:
+                try:
+                    response = self.ha_controller._service_call_with_retry(
+                        "nordpool",
+                        "get_prices_for_date",
+                        **attempt_data,
+                        return_response=True,
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt_data is service_data and _is_bad_request(e):
+                        logger.warning(
+                            "Nordpool service rejected explicit area payload %s; "
+                            "retrying with integration default area. Error: %s",
+                            attempt_data,
+                            _http_error_details(e),
+                        )
+                        continue
+                    raise
 
             if not response or "service_response" not in response:
                 raise ValueError(
@@ -195,8 +242,11 @@ class OfficialNordpoolSource(PriceSource):
         except Exception as e:
             if isinstance(e, ValueError):
                 raise
+            if last_error is not None:
+                e = last_error
             raise ValueError(
-                f"Failed to get prices from official integration for {target_date}: {e}"
+                f"Failed to get prices from official integration for {target_date}: "
+                f"{_http_error_details(e)}"
             ) from e
 
     def perform_health_check(self):
