@@ -663,6 +663,8 @@ class HomeAssistantAPIController:
         "solis_modbus_inverter_total_dc_output": "pv_power",
         "solis_modbus_inverter_household_load_power": "local_load_power",
         "solis_modbus_inverter_grid_power_net": "import_power",
+        "grid_export": "export_power",
+        "export_power": "export_power",
         "solis_modbus_inverter_meter_total_active_energy_from_grid": "lifetime_import_from_grid",
         "solis_modbus_inverter_meter_total_active_energy_to_grid": "lifetime_export_to_grid",
         "solis_modbus_inverter_pv_total_generation": "lifetime_solar_energy",

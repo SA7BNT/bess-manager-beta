@@ -887,6 +887,14 @@ class APIRealTimePower:
         battery_discharge_power = controller.get_battery_discharge_power()
         net_battery_power = controller.get_net_battery_power()
 
+        # Some integrations expose a single signed net-grid sensor instead of
+        # separate positive import/export sensors. Treat negative import as
+        # export unless an explicit export sensor is configured and reporting.
+        if grid_import_power is not None and grid_import_power < 0:
+            if grid_export_power is None or grid_export_power <= 0:
+                grid_export_power = abs(grid_import_power)
+            grid_import_power = 0
+
         def create_formatted_power(value):
             """Create formatted power value structure with thousands separators"""
             if value is None:

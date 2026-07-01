@@ -229,6 +229,12 @@ Charge/discharge currents are scaled from BESS percentages against the HA Number
 entity's configured maximum, so model-specific current limits remain owned by
 the Solis integration.
 
+**Grid power monitoring:** BESS supports either a signed net-grid sensor on
+`import_power` (positive import, negative export) or separate `import_power` and
+`export_power` sensors. For Solis systems where the inverter net-grid register
+does not match the utility meter direction, map a meter/Pulse export sensor to
+`export_power` and a positive import sensor to `import_power`.
+
 ---
 
 ## Required Entities by Platform

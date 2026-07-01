@@ -58,6 +58,11 @@ def _solis_registry() -> list[dict]:
             dict_sid("solis_modbus_inverter_total_dc_output"),
         ),
         _entity(
+            "sensor.solis_grid_export",
+            "solis_modbus",
+            sid("grid_export"),
+        ),
+        _entity(
             "sensor.solis_household_total_energy",
             "solis_modbus",
             dict_sid("solis_modbus_inverter_household_total_energy"),
@@ -944,6 +949,7 @@ class TestDiscoverSensorsFromRegistry:
         )
         assert solis["solis_tou_mode"] == "switch.solis_tou"
         assert solis["grid_charge"] == "switch.solis_grid_charge"
+        assert solis["export_power"] == "sensor.solis_grid_export"
         assert solis["battery_charging_power_rate"] == "number.solis_charge_current_1"
         assert (
             solis["battery_discharging_power_rate"]

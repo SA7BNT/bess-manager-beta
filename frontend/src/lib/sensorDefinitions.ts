@@ -436,6 +436,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
           { key: 'pv_power', label: 'PV Power', required: false },
           { key: 'local_load_power', label: 'Household Load Power', required: false },
           { key: 'import_power', label: 'Grid Power Net', required: false },
+          { key: 'export_power', label: 'Grid Export Power', required: false },
         ],
       },
       {
