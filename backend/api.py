@@ -3040,6 +3040,7 @@ async def run_setup_discovery():
                 "device_sn": integrations["device_sn"],
                 "growatt_device_id": integrations["growatt_device_id"],
                 "solax_found": integrations["solax_found"],
+                "solis_found": integrations.get("solis_found", False),
                 "solax_has_growatt_tou": integrations.get(
                     "solax_has_growatt_tou", False
                 ),

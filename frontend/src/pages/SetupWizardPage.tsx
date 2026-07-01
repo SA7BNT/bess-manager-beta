@@ -126,9 +126,16 @@ const SetupWizardPage: React.FC = () => {
         ...(d.octopusEntities?.exportTomorrow ? { octopusExportTomorrowEntity: d.octopusEntities.exportTomorrow } : {}),
         ...(d.entsoeEntity ? { entsoeEntity: d.entsoeEntity } : {}),
       }));
-      // Auto-select the first detected platform; user can switch if multiple
+      // Auto-select the detected platform. Prefer an already configured
+      // platform, then Solis when solis_modbus sensors are present.
+      const existing = existingSensorsRef.current;
       const detected = d.detectedInverterPlatforms ?? [];
-      const detectedPlatform = detected[0] ?? null;
+      const savedPlatform = typeof existing.platform === 'string' ? existing.platform : '';
+      const detectedPlatform = savedPlatform && d.platformSensors?.[savedPlatform]
+        ? savedPlatform
+        : d.platformSensors?.solis_modbus
+          ? 'solis_modbus'
+          : detected[0] ?? null;
       if (detectedPlatform) {
         setInverterForm(f => ({ ...f, inverterPlatform: detectedPlatform }));
       }
@@ -140,7 +147,6 @@ const SetupWizardPage: React.FC = () => {
       // platformSensors has per-platform dicts; shared sensors come from d.sensors.
       const platform = detectedPlatform ?? inverterForm.inverterPlatform ?? '';
       const newSensors: PerPlatformSensors = emptyPerPlatformSensors(platform);
-      const existing = existingSensorsRef.current;
 
       // Populate each platform's sub-dict from discovered platformSensors
       if (d.platformSensors) {
