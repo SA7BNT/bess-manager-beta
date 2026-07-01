@@ -271,7 +271,7 @@ export function SensorConfigSection({ sensors, onChange, inverterForm, onInverte
         {/* Level 1: Integration tabs — Growatt Cloud vs SolaX Modbus */}
         {(() => {
           const cloudDetected = growattDetected;
-          const modbusDetected = growattModbusDetected || growattModbusGen3Detected || solaxDetected;
+          const modbusDetected = growattModbusDetected || growattModbusGen3Detected || solaxDetected || solisDetected;
           const activeTab = isCloudActive ? 'cloud' : 'modbus';
 
           return (
